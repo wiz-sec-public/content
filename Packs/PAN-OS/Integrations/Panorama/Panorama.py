@@ -4660,12 +4660,44 @@ def prettify_query_fields(application: Optional[str] = None, category: Optional[
     return pretty_query_fields
 
 
+def devices():
+    res = http_request(URL, 'GET', params={'key': API_KEY, 'type': 'op',
+                                           'cmd': '<show><devices><all></all></devices></show>'})
+    devices_entry = dict_safe_get(res, ['response', 'result', 'devices', 'entry'])
+    devices_entry = devices_entry if isinstance(devices_entry, list) else [devices_entry]
+    for device in devices_entry:
+        yield device['serial']
+
+
+def format_eadable_security_policy_match_headers(hedear_name):
+    formated_headers = {
+        'From': 'From zone',
+        'To': 'To zone',
+    }
+    return formated_headers.get(hedear_name, hedear_name)
+
+
+def readable_security_policy_match_outputs(context_list):
+    readable_list = []
+    for context in context_list:
+        target = context.get('DeviceSerial')
+        if target:
+            table_name = f'Matching Security Policies in `{target}` FW:'
+        else:
+            table_name = 'Matching Security Policies:'
+
+        readable_list.append(tableToMarkdown(table_name, context['Rules'], removeNull=True,
+                                             headers=['Name', 'Action', 'From', 'Source', 'To', 'Destination', 'Application'],
+                                             headerTransform=format_eadable_security_policy_match_headers))
+
+    return '\n'.join(readable_list)
+
+
 def panorama_security_policy_match_command(args: dict):
-    target = args.get('target')
-    if not VSYS and not target:
-        err_msg = "The 'panorama-security-policy-match' command is relevant for a Firewall instance " \
-                  "or for a Panorama instance, to be used with the target argument."
-        raise DemistoException(err_msg)
+    if VSYS:
+        targets = [None]
+    else:
+        targets = argToList(args.get('target')) or devices()
 
     application = args.get('application')
     category = args.get('category')
@@ -4677,26 +4709,28 @@ def panorama_security_policy_match_command(args: dict):
     source = args.get('source')
     source_user = args.get('source-user')
 
-    matching_rules = panorama_security_policy_match(application, category, destination, destination_port, from_, to_,
-                                                    protocol, source, source_user, target)
-    if not matching_rules:
+    context_list = []
+    for target in targets:
+        matching_rules = panorama_security_policy_match(application, category, destination, destination_port, from_, to_,
+                                                        protocol, source, source_user, target)
+        if matching_rules:
+            context_list.append({
+                'Rules': prettify_matching_rules(matching_rules['rules']['entry']),
+                'QueryFields': prettify_query_fields(application, category, destination, destination_port, from_,
+                                                     to_, protocol, source, source_user),
+                'Query': build_policy_match_query(application, category, destination, destination_port, from_,
+                                                  to_, protocol, source, source_user),
+                'DeviceSerial': target
+            })
+
+    if not context_list:
         return_results('The query did not match a Security policy.')
     else:
-        ec_ = {'Rules': prettify_matching_rules(matching_rules['rules']['entry']),
-               'QueryFields': prettify_query_fields(application, category, destination, destination_port,
-                                                    from_, to_, protocol, source, source_user),
-               'Query': build_policy_match_query(application, category, destination, destination_port,
-                                                 from_, to_, protocol, source, source_user)}
-        return_results({
-            'Type': entryTypes['note'],
-            'ContentsFormat': formats['json'],
-            'Contents': matching_rules,
-            'ReadableContentsFormat': formats['markdown'],
-            'HumanReadable': tableToMarkdown('Matching Security Policies:', ec_['Rules'],
-                                             ['Name', 'Action', 'From', 'To', 'Source', 'Destination', 'Application'],
-                                             removeNull=True),
-            'EntryContext': {"Panorama.SecurityPolicyMatch(val.Query == obj.Query)": ec_}
-        })
+        readable_output = readable_security_policy_match_outputs(context_list)
+
+        return_results(CommandResults(
+            outputs_prefix='Panorama.SecurityPolicyMatch(val.Query == obj.Query &&  == obj.DeviceSerial)',
+            outputs=context_list, readable_output=readable_output))
 
 
 ''' Static Routes'''
@@ -7134,7 +7168,6 @@ def main():
 
         # Remove proxy if not set to true in params
         handle_proxy()
-
 
         if demisto.command() == 'test-module':
             panorama_test()
