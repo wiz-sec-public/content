@@ -60,6 +60,7 @@ def format_results(indicators: List, incident_ids: List):
     if len(indicators_df) == 0:
         return 'No mutual indicators were found.'
 
+    associate_to_current_incident(indicators)
     indicators_df['Id'] = indicators_df['id'].apply(lambda x: "[%s](#/indicator/%s)" % (x, x))
     indicators_df = indicators_df.sort_values(['score', 'Involved Incidents Count'], ascending=False)
     indicators_df['Reputation'] = indicators_df['score'].apply(scoreToReputation)
@@ -90,7 +91,6 @@ def main():  # pragma: no cover
     try:
         incident_ids = get_incidents_ids_from_context()
         indicators = get_indicatos_from_incidents(incident_ids)
-        associate_to_current_incident(indicators)
         set_results(format_results(indicators, incident_ids))
     except Exception as ex:
         demisto.error(traceback.format_exc())  # print the traceback
