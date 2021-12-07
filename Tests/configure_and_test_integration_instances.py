@@ -635,6 +635,23 @@ def set_integration_instance_parameters(integration_configuration,
 
     print(f"########################## {integration_configuration=}, params={integration_params.keys()} ###############")
     # TODO add incident_configuration to integration
+    incident_configuration = integration_params.pop('incident_configuration', {})
+    module_configuration.append(
+        {
+            "hiddenUsername": False,
+            "display": "Incident type",
+            "hiddenPassword": False,
+            "hidden": False,
+            "name": "incidentType",
+            "info": "",
+            "defaultValue": "",
+            "type": 13,
+            "displayPassword": "",
+            "options": None,
+            "required": False,
+            "value": "Access",
+            "hasvalue": True
+        })
 
     # define module instance
     module_instance = {
@@ -648,6 +665,8 @@ def set_integration_instance_parameters(integration_configuration,
         'isIntegrationScript': is_byoi,
         'name': instance_name,
         'passwordProtected': False,
+        'mappingId': '',
+        'incomingMapperId': '',
         'version': 0
     }
 
