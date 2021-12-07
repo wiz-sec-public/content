@@ -631,6 +631,9 @@ def set_integration_instance_parameters(integration_configuration,
     else:
         instance_name = '{}_test_{}'.format(integration_instance_name.replace(' ', '_'), str(uuid.uuid4()))
 
+    print(f"########################## {integration_configuration=}, params={integration_params.keys()} ###############")
+    # TODO add incident_configuration to integration
+
     # define module instance
     module_instance = {
         'brand': integration_configuration['name'],

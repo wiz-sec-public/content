@@ -1,6 +1,6 @@
-id: Carbon Black Enterprise EDR Process Search Test
+id: Phising_input_y
 version: -1
-name: Carbon Black Enterprise EDR Process Search Test
+name: Phising_input_y
 starttaskid: "0"
 tasks:
   "0":
