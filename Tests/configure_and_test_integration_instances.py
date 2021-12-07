@@ -636,22 +636,10 @@ def set_integration_instance_parameters(integration_configuration,
     print(f"########################## {integration_configuration=}, params={integration_params.keys()} ###############")
     # TODO add incident_configuration to integration
     incident_configuration = integration_params.pop('incident_configuration', {})
-    module_configuration.append(
-        {
-                "hiddenUsername": False,
-                "display": "Incident type",
-                "hiddenPassword": False,
-                "hidden": False,
-                "name": "incidentType",
-                "info": "",
-                "defaultValue": "",
-                "type": 13,
-                "displayPassword": "",
-                "options": None,
-                "required": False,
-                "value": "Access",
-                "hasvalue": True
-            })
+    if incident_configuration.get('incident_type'):
+        incident_type_configuration = list(
+            filter(lambda config: config.get('name') == 'incidentType', module_configuration))
+        incident_type_configuration[0] = incident_configuration.get('incident_type')
 
     # define module instance
     module_instance = {
@@ -665,8 +653,8 @@ def set_integration_instance_parameters(integration_configuration,
         'isIntegrationScript': is_byoi,
         'name': instance_name,
         'passwordProtected': False,
-        'mappingId': '',
-        'incomingMapperId': '',
+        'mappingId': incident_configuration.get('classifier_id') if incident_configuration.get('classifier_id') else '',
+        'incomingMapperId': incident_configuration.get('incoming_mapper_id') if incident_configuration.get('incoming_mapper_id') else '',
         'version': 0
     }
 
