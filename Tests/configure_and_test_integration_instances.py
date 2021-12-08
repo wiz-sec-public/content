@@ -639,7 +639,7 @@ def set_integration_instance_parameters(integration_configuration,
     if incident_configuration.get('incident_type'):
         incident_type_configuration = list(
             filter(lambda config: config.get('name') == 'incidentType', module_configuration))
-        incident_type_configuration[0] = incident_configuration.get('incident_type')
+        incident_type_configuration[0]['value'] = incident_configuration.get('incident_type')
 
     # define module instance
     module_instance = {
@@ -653,8 +653,8 @@ def set_integration_instance_parameters(integration_configuration,
         'isIntegrationScript': is_byoi,
         'name': instance_name,
         'passwordProtected': False,
-        'mappingId': incident_configuration.get('classifier_id') if incident_configuration.get('classifier_id') else '',
-        'incomingMapperId': incident_configuration.get('incoming_mapper_id') if incident_configuration.get('incoming_mapper_id') else '',
+        # 'mappingId': incident_configuration.get('classifier_id') if incident_configuration.get('classifier_id') else '',
+        # 'incomingMapperId': incident_configuration.get('incoming_mapper_id') if incident_configuration.get('incoming_mapper_id') else '',
         'version': 0
     }
 
