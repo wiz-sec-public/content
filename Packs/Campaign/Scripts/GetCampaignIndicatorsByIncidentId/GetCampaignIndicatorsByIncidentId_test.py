@@ -78,9 +78,12 @@ def test_get_indicators_by_incident_id(mocker, incident_ids, indicators, expecte
     assert result == expected_result
 
 
-def test_set_results(mocker):
+def test_set_path(mocker):
     execute_command_mocker = mocker.patch.object(demisto, 'executeCommand')
-    set_results('test')
+    mocker.patch('GetCampaignIndicatorsByIncidentId.get_incidents_ids_from_context', return_value={})
+    mocker.patch('GetCampaignIndicatorsByIncidentId.get_indicatos_from_incidents', return_value={})
+    mocker.patch('GetCampaignIndicatorsByIncidentId.format_results', return_value='test')
+    main()
     execute_command_mocker.assert_called_once_with('setIncident', {'campaignmutualindicators': 'test'})
 
 
