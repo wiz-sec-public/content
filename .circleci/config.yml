@@ -410,7 +410,7 @@ references:
       name: Create ID Set
       when: always
       command: |
-        demisto-sdk create-id-set -o ./Tests/id_set.json --fail-duplicates`
+        demisto-sdk create-id-set -o ./Tests/id_set.json --fail-duplicates
         cp ./Tests/id_set.json $CIRCLE_ARTIFACTS
 
   merge_public_and_private_id_sets: &merge_public_and_private_id_sets
@@ -421,6 +421,7 @@ references:
         if [[ $CIRCLE_BRANCH =~ pull/[0-9]+ ]]; then
             echo "Skipping, Should not run on contributor's branch."
             exit 0
+        fi
 
         # Download private ID set
         gsutil cp gs://marketplace-dist/content/private_id_set.json $CIRCLE_ARTIFACTS/unified_id_set.json
@@ -428,7 +429,7 @@ references:
 
         # Merge public and private ID sets
         demisto-sdk merge-id-sets -i1 ./Tests/id_set.json -i2 $CIRCLE_ARTIFACTS/unified_id_set.json -o $CIRCLE_ARTIFACTS/unified_id_set.json
-        echo "successfully merged public and private ID sets"§
+        echo "successfully merged public and private ID sets"
 
   build_content_descriptor: &build_content_descriptor
     run:
