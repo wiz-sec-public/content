@@ -633,7 +633,6 @@ def set_integration_instance_parameters(integration_configuration,
     else:
         instance_name = '{}_test_{}'.format(integration_instance_name.replace(' ', '_'), str(uuid.uuid4()))
 
-    print(f"########################## {integration_configuration=}, params={integration_params.keys()} ###############")
     # TODO add incident_configuration to integration
     incident_configuration = integration_params.pop('incident_configuration', {})
     if incident_configuration.get('incident_type'):
@@ -641,6 +640,7 @@ def set_integration_instance_parameters(integration_configuration,
             filter(lambda config: config.get('name') == 'incidentType', module_configuration))
         incident_type_configuration[0]['value'] = incident_configuration.get('incident_type')
 
+    print(f"########################## {integration_configuration=}, params={integration_params.keys()} ###############")
     # define module instance
     module_instance = {
         'brand': integration_configuration['name'],
