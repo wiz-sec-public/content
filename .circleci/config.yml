@@ -1,438 +1,5168 @@
 version: 2.1
-commands:
-  set-instance-role-env-variable:
-    description: "Sets INSTANCE_ROLE env variable into $BASH_ENV file"
-    parameters:
-      instance_role:
-        type: string
-      instance_created:
-        type: string
-        default: ""
-    steps:
-      - run:
-          name: Set INSTANCE_ROLE env variable
-          command: |
-            echo 'export INSTANCE_ROLE="<< parameters.instance_role >>"' >> $BASH_ENV
-            echo 'export INSTANCE_WAS_CREATED="<< parameters.instance_created >>"' >> $BASH_ENV
-  start-tunnel:
-    description: "Opens an ssh tunnel to the demisto servers and wait until the tunnels are established"
-    parameters:
-      timeout:
-        type: integer
-        default: 10
-    steps:
-      - run:
-          name: add ssh configurations
-          shell: /bin/bash
-          command: |
-            if [ -z $INSTANCE_WAS_CREATED ];
-              then
-                echo "Skipping - instance was not created"
-                exit 0
-            fi
-            # Modifying ssh config file
-            echo "Host 10.0.*
-              StrictHostKeyChecking no
-              LogLevel ERROR
-              ProxyJump content-build@content-build-lb.demisto.works  # disable-secrets-detection
-             Host content-build-lb.demisto.works
-              Port 43567
-              UserKnownHostsFile /dev/null
-              StrictHostKeyChecking no
-              LogLevel ERROR" >> ~/.ssh/config
-      - run:
-          name: Open SSH Tunnel
-          command: |
-            if [ -z $INSTANCE_WAS_CREATED ];
-              then
-                echo "Skipping - instance was not created"
-                exit 0
-            fi
-            ./Tests/scripts/open_ssh_tunnel.sh
+orbs:
+  aws-cli: circleci/aws-cli@0.1.13
+  swissknife: wiz-sec/swissknife@0.9.0
+  wiz-slack:
+    commands:
+      notify:
+        description: Send Slack notification
+        parameters:
+          slack_channels:
+            type: string
+            default: test-slack
+          notify_on:
+            default: fail
+            description: |
+              In what event should this message send? Options: ["fail", "success", "always"]
+            enum:
+              - fail
+              - success
+              - always
+              - never
+            type: enum
+          enable_slack_mention:
+            default: true
+            description: Determines whether to mention authors on Slack
+            type: boolean
+          artifacts_buttons_json:
+            default: "[]"
+            type: string
+            description: |
+              json list of objects with "button_text" and "artifact_path" fields
+        steps:
+          - run:
+              command: |
+                echo 'fail' > /tmp/SLACK_JOB_STATUS
+              name: Slack - Detecting Job Status (FAIL)
+              when: on_fail
+          - run:
+              command: |
+                echo 'success' > /tmp/SLACK_JOB_STATUS
+              name: Slack - Detecting Job Status (PASS)
+              when: on_success
+          - restore_cache:
+              keys:
+                - slack_libs_python_v1
+          - run:
+              name: install slack message script libs
+              when: always
+              command: |
+                mkdir -p $PIP_CACHE_DIR
+                pip3 install boto3==1.24.8 slack_sdk==3.19.1
+              environment:
+                PIP_CACHE_DIR: /tmp/pip_cache
+          - save_cache:
+              key: slack_libs_python_v1
+              paths:
+                - /tmp/pip_cache
+          - run:
+              name: Send slack notification
+              when: always
+              environment:
+                ARTIFACTS_JSON: << parameters.artifacts_buttons_json >>
+              command: |
+                cd .circleci/scripts
+                python3 slack_notifier.py \
+                  --send_when=<< parameters.notify_on >> \
+                  --enable_slack_mention=<< parameters.enable_slack_mention >> \
+                  --status=$(cat /tmp/SLACK_JOB_STATUS) \
+                  --commit=$CIRCLE_SHA1 \
+                  --repo=wiz \
+                  --branch=${CIRCLE_BRANCH} \
+                  --build_number=${CIRCLE_BUILD_NUM} \
+                  --job_link=https://app.circleci.com/pipelines/workflows/$CIRCLE_WORKFLOW_ID \
+                  --slack_channels=<< parameters.slack_channels >>
+
+int_branches: &int_branches
+  - integration-us1
+  - integration-eu1
+  - integration-eu2
+  - integration-eu3
+  - integration-eu4
+
+deployable_branches: &deployable_branches
+  - develop
+  - integration-us1
+  - integration-eu1
+  - integration-eu2
+  - integration-eu3
+  - integration-eu4
+
+triggers: &triggers '[
+    {
+        "regex": ".*",
+        "param_name": "validate"
+    },
+    {
+        "regex": "^.*-dal/sql/.*",
+        "param_name": "validate-sql-migrations"
+    },
+    {
+        "regex": "^[a-zA-Z0-9]+lib/.*",
+        "param_name": "buildlibs"
+    },
+    {
+        "regex": "^datascanlib/.*",
+        "param_name": "datascanlib"
+    },
+    {
+        "regex": "^(diskanalyzerlib|xccdflib|ovallib)/.*",
+        "param_name": "diskanalyzerlib"
+    },
+    {
+        "regex": "^end2endtests/.*",
+        "param_name": "end2endtests"
+    },
+    {
+        "regex": "^(web|gqlgen)/.*",
+        "param_name": "web"
+    },
+    {
+        "regex": "^web/.*",
+        "param_name": "web-only"
+    },
+    {
+        "regex": "(^web/src/contentManagement/threatCenter/.*)|(^web/src/contentManagement/types/cmsThreat.ts)",
+        "param_name": "threats-center-data"
+    },
+    {
+        "regex": "^api-gateway/.*",
+        "param_name": "api-gateway"
+    },
+    {
+        "regex": "^connector-dal/.*",
+        "param_name": "connector-dal"
+    },
+    {
+        "regex": "^service-registry/.*",
+        "param_name": "service-registry"
+    },
+    {
+        "regex": "^control-engine/.*",
+        "param_name": "control-engine"
+    },
+    {
+        "regex": "^control-engine-operator/.*",
+        "param_name": "control-engine-operator"
+    },
+    {
+        "regex": "^cloudplatform-dal/.*",
+        "param_name": "cloudplatform-dal"
+    },
+    {
+        "regex": "^changeset-ingestor/.*",
+        "param_name": "changeset-ingestor"
+    },
+    {
+        "regex": "^changeset-dal/.*",
+        "param_name": "changeset-dal"
+    },
+    {
+        "regex": "^cloudplatform-fetcher/.*",
+        "param_name": "cloudplatform-fetcher"
+    },
+    {
+        "regex": "^outpost-operator/.*",
+        "param_name": "outpost-operator"
+    },
+    {
+        "regex": "^outpost-state-dal/.*",
+        "param_name": "outpost-state-dal"
+    },
+    {
+        "regex": "^outpost-statesyncer/.*",
+        "param_name": "outpost-statesyncer"
+    },
+    {
+        "regex": "^tenant-dal/.*",
+        "param_name": "tenant-dal"
+    },
+    {
+        "regex": "^objectstore-deleteunseen/.*",
+        "param_name": "objectstore-deleteunseen"
+    },
+    {
+        "regex": "^objectstore-operator/.*",
+        "param_name": "objectstore-operator"
+    },
+    {
+        "regex": "^tenant-deleter/.*",
+        "param_name": "tenant-deleter"
+    },
+    {
+        "regex": "^tenant-operator/.*",
+        "param_name": "tenant-operator"
+    },
+    {
+        "regex": "^backoffice-dal/.*",
+        "param_name": "backoffice-dal"
+    },
+    {
+        "regex": "^backoffice-request-dal/.*",
+        "param_name": "backoffice-request-dal"
+    },
+    {
+        "regex": "^backoffice-users-dal/.*",
+        "param_name": "backoffice-users-dal"
+    },
+    {
+        "regex": "^backoffice-ingestor/.*",
+        "param_name": "backoffice-ingestor"
+    },
+    {
+        "regex": "^packageregistry-dal/.*",
+        "param_name": "packageregistry-dal"
+    },
+    {
+        "regex": "^packageregistry-fetcher/.*",
+        "param_name": "packageregistry-fetcher"
+    },
+    {
+        "regex": "^scan-attribution-dal/.*",
+        "param_name": "scan-attribution-dal"
+    },
+    {
+        "regex": "^product-dal/.*",
+        "param_name": "product-dal"
+    },
+    {
+        "regex": "^builtins-updater/.*",
+        "param_name": "builtins-updater"
+    },
+    {
+        "regex": "^workload-dal/.*",
+        "param_name": "workload-dal"
+    },
+    {
+        "regex": "^userdirectory-dal/.*",
+        "param_name": "userdirectory-dal"
+    },
+    {
+        "regex": "^auth/.*",
+        "param_name": "auth"
+    },
+    {
+        "regex": "^auth0-fetcher/.*",
+        "param_name": "auth0-fetcher"
+    },
+    {
+        "regex": "^graph-ingestor/.*",
+        "param_name": "graph-ingestor"
+    },
+    {
+        "regex": "^graph-gc/.*",
+        "param_name": "graph-gc"
+    },
+    {
+        "regex": "^issues-ingestor/.*",
+        "param_name": "issues-ingestor"
+    },
+    {
+        "regex": "^object-ingestor/.*",
+        "param_name": "object-ingestor"
+    },
+    {
+        "regex": "^scan-attribution-ingestor/.*",
+        "param_name": "scan-attribution-ingestor"
+    },
+    {
+        "regex": "^user-dal/.*",
+        "param_name": "user-dal"
+    },
+    {
+        "regex": "^notification-dal/.*",
+        "param_name": "notification-dal"
+    },
+    {
+        "regex": "^notification-ingestor/.*",
+        "param_name": "notification-ingestor"
+    },
+    {
+        "regex": "^techstack-dal/.*",
+        "param_name": "techstack-dal"
+    },
+    {
+        "regex": "^versioncontrol-dal/.*",
+        "param_name": "versioncontrol-dal"
+    },
+    {
+        "regex": "^versioncontrol-fetcher/.*",
+        "param_name": "versioncontrol-fetcher"
+    },
+    {
+        "regex": "^securitytool-dal/.*",
+        "param_name": "securitytool-dal"
+    },
+    {
+        "regex": "^(vulnerabilities-engine|diskscanlib)/.*",
+        "param_name": "vulnerabilities-engine"
+    },
+    {
+        "regex": "^(vminsight-ingestor|diskscanlib)/.*",
+        "param_name": "vminsight-ingestor"
+    },
+    {
+        "regex": "^graph-dal/.*",
+        "param_name": "graph-dal"
+    },
+    {
+        "regex": "^utils/.*",
+        "param_name": "utils"
+    },
+    {
+        "regex": "^graph-enricher/.*",
+        "param_name": "graph-enricher"
+    },
+    {
+        "regex": "^fileupload-dal/.*",
+        "param_name": "fileupload-dal"
+    },
+    {
+        "regex": "^securitytool-parser/.*",
+        "param_name": "securitytool-parser"
+    },
+    {
+        "regex": "^(diskanalyzer|diskanalyzerlib|datascanlib|secretslib)/.*",
+        "param_name": "diskanalyzer"
+    },
+    {
+        "regex": "^(bucketanalyzer|datascanlib)/.*",
+        "param_name": "bucketanalyzer"
+    },
+    {
+        "regex": "^(dbanalyzer|datascanlib)/.*",
+        "param_name": "dbanalyzer"
+    },
+    {
+        "regex": "^diskanalyzer-init-pull-image/.*",
+        "param_name": "diskanalyzer-init-pull-image"
+    },
+    {
+        "regex": "^diskanalyzer-serverless-scanner/.*",
+        "param_name": "diskanalyzer-serverless-scanner"
+    },
+    {
+        "regex": "^diskanalyzer-coordinator/.*",
+        "param_name": "diskanalyzer-coordinator"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner/.*",
+        "param_name": "diskanalyzer-provisioner"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-aws/.*",
+        "param_name": "diskanalyzer-provisioner-aws"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-azure/.*",
+        "param_name": "diskanalyzer-provisioner-azure"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-dal/.*",
+        "param_name": "diskanalyzer-provisioner-dal"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-gcp/.*",
+        "param_name": "diskanalyzer-provisioner-gcp"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-oci/.*",
+        "param_name": "diskanalyzer-provisioner-oci"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-helm/.*",
+        "param_name": "diskanalyzer-provisioner-helm"
+    },
+    {
+        "regex": "^diskanalyzer-provisioner-bootstrap/.*",
+        "param_name": "diskanalyzer-provisioner-bootstrap"
+    },
+    {
+        "regex": "^diskanalyzer-diskmanager/.*",
+        "param_name": "diskanalyzer-diskmanager"
+    },
+    {
+        "regex": "^diskanalyzer-operator/.*",
+        "param_name": "diskanalyzer-operator"
+    },
+    {
+        "regex": "^diskanalyzer-scan-results-replay/.*",
+        "param_name": "diskanalyzer-scan-results-replay"
+    },
+    {
+        "regex": "^diskanalyzer-results-forwarder/.*",
+        "param_name": "diskanalyzer-results-forwarder"
+    },
+    {
+        "regex": "^diskanalyzer-scanbroker/.*",
+        "param_name": "diskanalyzer-scanbroker"
+    },
+    {
+        "regex": "^outpost-files-csi-driver/.*",
+        "param_name": "outpost-files-csi-driver"
+    },
+    {
+        "regex": "^log-http-relayer/.*",
+        "param_name": "log-http-relayer"
+    },
+    {
+        "regex": "^cspm-matcher/.*",
+        "param_name": "cspm-matcher"
+    },
+    {
+        "regex": "^tunnel-auth/.*",
+        "param_name": "tunnel-auth"
+    },
+    {
+        "regex": "^audit-dal/.*",
+        "param_name": "audit-dal"
+    },
+    {
+        "regex": "^audit-ingestor/.*",
+        "param_name": "audit-ingestor"
+    },
+    {
+        "regex": "^report-dal/.*",
+        "param_name": "report-dal"
+    },
+    {
+        "regex": "^report-run-executor/.*",
+        "param_name": "report-run-executor"
+    },
+    {
+        "regex": "^report-operator/.*",
+        "param_name": "report-operator"
+    },
+    {
+        "regex": "^report-generator/.*",
+        "param_name": "report-generator"
+    },
+    {
+        "regex": "^benchmark-dal/.*",
+        "param_name": "benchmark-dal"
+    },
+    {
+        "regex": "^tunnel-server/.*",
+        "param_name": "tunnel-server"
+    },
+    {
+        "regex": "^(iac-dal|kicslib)/.*",
+        "param_name": "iac-dal"
+    },
+    {
+        "regex": "^secrets-dal/.*",
+        "param_name": "secrets-dal"
+    },
+    {
+        "regex": "^connector-operator/.*",
+        "param_name": "connector-operator"
+    },
+    {
+        "regex": "^cspm-dal/.*",
+        "param_name": "cspm-dal"
+    },
+    {
+    "regex": "^cspmlib/.*",
+    "param_name": "cspmlib"
+    },
+    {
+        "regex": "^(cli-dal|vulnerabilities-engine|clilib)/.*",
+        "param_name": "cli-dal"
+    },
+    {
+        "regex": "^(cli|diskanalyzerlib|xccdflib|ovallib|clilib)/.*",
+        "param_name": "cli"
+    },
+    {
+        "regex": "^accelerator-sync/.*",
+        "param_name": "accelerator-sync"
+    },
+    {
+        "regex": "^hashcracker-ingestor/.*",
+        "param_name": "hashcracker-ingestor"
+    },
+    {
+        "regex": "^scanstatus-ingestor/.*",
+        "param_name": "scanstatus-ingestor"
+    },
+    {
+        "regex": "^fetcher-dal/.*",
+        "param_name": "fetcher-dal"
+    },
+    {
+        "regex": "^forensic-dal/.*|^builtins-updater/internal/catalog/cloudevent/.*",
+        "param_name": "forensic-dal"
+    },
+    {
+        "regex": "^forensic-ingestor/.*",
+        "param_name": "forensic-ingestor"
+    },
+    {
+        "regex": "^forensic-cron/.*",
+        "param_name": "forensic-cron"
+    },
+    {
+        "regex": "^sandboxed-opa-runner/.*",
+        "param_name": "sandboxed-opa-runner"
+    },
+    {
+        "regex": "^filereputation/.*",
+        "param_name": "filereputation"
+    },
+    {
+        "regex": "^filereputation-manager/.*",
+        "param_name": "filereputation-manager"
+    },
+    {
+        "regex": "^tenant-monitor/.*",
+        "param_name": "tenant-monitor"
+    },
+    {
+        "regex": "^tenant-usagemetrics/.*",
+        "param_name": "tenant-usagemetrics"
+    },
+    {
+        "regex": "^enricher-operator/.*",
+        "param_name": "enricher-operator"
+    },
+    {
+        "regex": "^enricher-dal/.*",
+        "param_name": "enricher-dal"
+    },
+    {
+        "regex": "^(gqlgen)/.*",
+        "param_name": "gqlgen"
+    },
+    {
+        "regex": "^(gqlgen-backoffice)/.*",
+        "param_name": "gqlgen-backoffice"
+    },
+    {
+        "regex": "^(autogenlib/types|grpclib/rpc|proto)/.*",
+        "param_name": "proto"
+    },
+    {
+        "regex": "^(iac-dal|iaclib|kicslib)/.*",
+        "param_name": "iac-rego-lib"
+    },
+    {
+        "regex": "^wiz-terraform-provider/.*",
+        "param_name": "wiz-terraform-provider"
+    },
+    {
+        "regex": "^securityinsight-dal/.*",
+        "param_name": "securityinsight-dal"
+    },
+    {
+        "regex": "^artifact-dal/.*",
+        "param_name": "artifact-dal"
+    },
+    {
+        "regex": "^artifact-fetcher/.*",
+        "param_name": "artifact-fetcher"
+    },
+    {
+        "regex": "^auth-pretoken/.*",
+        "param_name": "auth-pretoken"
+    },
+    {
+        "regex": "^auth-msg/.*",
+        "param_name": "auth-msg"
+    },
+    {
+        "regex": "^artifact-scan-ingestor/.*",
+        "param_name": "artifact-scan-ingestor"
+    },
+    {
+        "regex": "^netscanner-coordinator/.*",
+        "param_name": "netscanner-coordinator"
+    },
+    {
+        "regex": "^netscanner-results-ingestor/.*",
+        "param_name": "netscanner-results-ingestor"
+    },
+    {
+        "regex": "^netscanner-serverless/.*",
+        "param_name": "netscanner-serverless"
+    },
+    {
+        "regex": "^netscanner-screenshot/.*",
+        "param_name": "netscanner-screenshot"
+    },
+    {
+        "regex": "^datascan-dal/.*",
+        "param_name": "datascan-dal"
+    },
+    {
+        "regex": "^host-configuration-dal/.*",
+        "param_name": "host-configuration-dal"
+    },
+    {
+        "regex": "^postgres-updater/.*",
+        "param_name": "postgres-updater"
+    },
+    {
+        "regex": "^admission-controller-dal/.*",
+        "param_name": "admission-controller-dal"
+    },
+    {
+        "regex": "^wiz-admission-controller/.*",
+        "param_name": "wiz-admission-controller"
+    }
+  ]'
+
+golibs: &golibs
+  - alibabalib
+  - annotatelib
+  - analyticslib
+  - authlib
+  - autogenlib
+  - azurelib
+  - backofficelib
+  - channellib
+  - clouderrorlib
+  - configlib
+  - connectorstatuslib
+  - constantlib
+  - containerlib
+  - csvlib
+  - diskanalyzerprovisionerlib
+  - diskscanlib
+  - enrichmentslib
+  - errorlib
+  - fetcherlib
+  - filebrokerlib
+  - filereputationlib
+  - forensiclib
+  - gcplib
+  - gitopslib
+  - gqllib
+  - graphenricherlib
+  - gremlinlib
+  - grpclib
+  - httplib
+  - httprelaylib
+  - iaclib
+  - iampermissionslib
+  - licenseslib
+  - loglib
+  - messagebrokerlib
+  - metricslib
+  - nativetypelib
+  - netraversalib
+  - ocilib
+  - opalib
+  - operatorlib
+  - ovallib
+  - reflectionlib
+  - reportlib
+  - stringlib
+  - systemactivitylib
+  - techconfiglib
+  - tenantconfiglib
+  - testlib
+  - ticketlib
+  - tracelib
+  - tunnellib
+  - vcslib
+  - wizgqlclientlib
+  - xccdflib
+
+go-xlarge-libs: &goxllibs
+  - automationlib
+  - cspmlib
+  - kicslib
+  - secretslib
+  - datalib
+  - staticdatalib
+  - commonlib
+  - awslib
+  - clilib
+  - synclib
 
 parameters:
-  artifact_build_num:
-    type: string
+  build-all:
+    default: false
+    type: boolean
+  run_trigger_workflow:
+    default: true
+    type: boolean
+  swissknife_sha:
     default: ""
-  nightly:
     type: string
-    default: ""
-  legacy_nightly:
+  validate:
+    type: boolean
+    default: false
+  validate-sql-migrations:
+    type: boolean
+    default: false
+  buildlibs:
+    type: boolean
+    default: false
+  datascanlib:
+    type: boolean
+    default: false
+  diskanalyzerlib:
+    type: boolean
+    default: false
+  wiz_ci_tag:
+    default: "33768f3-multiarch"
     type: string
-    default: ""
-  pr_number:
+  golang_python_tag:
+    default: "f496b2f"
     type: string
-    default: ""
-  contrib_branch:
+  wiz_ci_node_tag:
+    default: "e269882"
     type: string
-    default: ""
-  contrib_pack_name:
+  wiz_cypress_tag:
+    default: "c10e866"
     type: string
-    default: ""
-  sdk_ref:
+  janusgraph_tag:
+    default: "0.6"
     type: string
-    default: "master"
-  gcs_market_bucket:
+  postgresql_tag:
+    default: ut-14
     type: string
-    default: "marketplace-dist"
+  # Scheduled parameters
+  trigger-update-chromium-version:
+    type: boolean
+    default: false
+  # A parameter per package
+  api-gateway:
+    type: boolean
+    default: false
+  web:
+    type: boolean
+    default: false
+  web-only:
+    type: boolean
+    default: false
+  connector-dal:
+    type: boolean
+    default: false
+  service-registry:
+    type: boolean
+    default: false
+  control-engine:
+    type: boolean
+    default: false
+  control-engine-operator:
+    type: boolean
+    default: false
+  cloudplatform-dal:
+    type: boolean
+    default: false
+  backoffice-dal:
+    type: boolean
+    default: false
+  backoffice-request-dal:
+    type: boolean
+    default: false
+  backoffice-users-dal:
+    type: boolean
+    default: false
+  backoffice-ingestor:
+    type: boolean
+    default: false
+  benchmark-dal:
+    type: boolean
+    default: false
+  report-dal:
+    type: boolean
+    default: false
+  report-run-executor:
+    type: boolean
+    default: false
+  report-operator:
+    type: boolean
+    default: false
+  report-generator:
+    type: boolean
+    default: false
+  changeset-ingestor:
+    type: boolean
+    default: false
+  changeset-dal:
+    type: boolean
+    default: false
+  cloudplatform-fetcher:
+    type: boolean
+    default: false
+  tenant-dal:
+    type: boolean
+    default: false
+  tenant-deleter:
+    type: boolean
+    default: false
+  objectstore-deleteunseen:
+    type: boolean
+    default: false
+  objectstore-operator:
+    type: boolean
+    default: false
+  tenant-operator:
+    type: boolean
+    default: false
+  outpost-operator:
+    type: boolean
+    default: false
+  outpost-state-dal:
+    type: boolean
+    default: false
+  outpost-statesyncer:
+    type: boolean
+    default: false
+  packageregistry-dal:
+    type: boolean
+    default: false
+  packageregistry-fetcher:
+    type: boolean
+    default: false
+  product-dal:
+    type: boolean
+    default: false
+  builtins-updater:
+    type: boolean
+    default: false
+  workload-dal:
+    type: boolean
+    default: false
+  forensic-dal:
+    type: boolean
+    default: false
+  forensic-ingestor:
+    type: boolean
+    default: false
+  forensic-cron:
+    type: boolean
+    default: false
+  userdirectory-dal:
+    type: boolean
+    default: false
+  userdirectory-dal-migrator:
+    type: boolean
+    default: false
+  accelerator-sync:
+    type: boolean
+    default: false
+  auth:
+    type: boolean
+    default: false
+  auth0-fetcher:
+    type: boolean
+    default: false
+  graph-ingestor:
+    type: boolean
+    default: false
+  graph-gc:
+    type: boolean
+    default: false
+  issues-ingestor:
+    type: boolean
+    default: false
+  object-ingestor:
+    type: boolean
+    default: false
+  scan-attribution-ingestor:
+    type: boolean
+    default: false
+  user-dal:
+    type: boolean
+    default: false
+  notification-dal:
+    type: boolean
+    default: false
+  notification-ingestor:
+    type: boolean
+    default: false
+  techstack-dal:
+    type: boolean
+    default: false
+  versioncontrol-fetcher:
+    type: boolean
+    default: false
+  versioncontrol-dal:
+    type: boolean
+    default: false
+  vulnerabilities-engine:
+    type: boolean
+    default: false
+  vminsight-ingestor:
+    type: boolean
+    default: false
+  securitytool-dal:
+    type: boolean
+    default: false
+  graph-dal:
+    type: boolean
+    default: false
+  utils:
+    type: boolean
+    default: false
+  graph-enricher:
+    type: boolean
+    default: false
+  fileupload-dal:
+    type: boolean
+    default: false
+  securitytool-parser:
+    type: boolean
+    default: false
+  diskanalyzer:
+    type: boolean
+    default: false
+  bucketanalyzer:
+    type: boolean
+    default: false
+  dbanalyzer:
+    type: boolean
+    default: false
+  diskanalyzer-init-pull-image:
+    type: boolean
+    default: false
+  diskanalyzer-coordinator:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-aws:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-azure:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-dal:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-dal-migrator:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-gcp:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-oci:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-helm:
+    type: boolean
+    default: false
+  diskanalyzer-provisioner-bootstrap:
+    type: boolean
+    default: false
+  diskanalyzer-diskmanager:
+    type: boolean
+    default: false
+  diskanalyzer-operator:
+    type: boolean
+    default: false
+  diskanalyzer-scan-results-replay:
+    type: boolean
+    default: false
+  diskanalyzer-results-forwarder:
+    type: boolean
+    default: false
+  outpost-files-csi-driver:
+    type: boolean
+    default: false
+  diskanalyzer-scanbroker:
+    type: boolean
+    default: false
+  diskanalyzer-serverless-scanner:
+    type: boolean
+    default: false
+  log-http-relayer:
+    type: boolean
+    default: false
+  cspm-matcher:
+    type: boolean
+    default: false
+  tunnel-auth:
+    type: boolean
+    default: false
+  tunnel-server:
+    type: boolean
+    default: false
+  iac-dal:
+    type: boolean
+    default: false
+  iac-dal-migrator:
+    type: boolean
+    default: false
+  secrets-dal:
+    type: boolean
+    default: false
+  secrets-dal-migrator:
+    type: boolean
+    default: false
+  audit-dal:
+    type: boolean
+    default: false
+  audit-ingestor:
+    type: boolean
+    default: false
+  connector-operator:
+    type: boolean
+    default: false
+  enricher-dal:
+    type: boolean
+    default: false
+  enricher-operator:
+    type: boolean
+    default: false
+  cspm-dal:
+    type: boolean
+    default: false
+  cspmlib:
+    type: boolean
+    default: false
+  cli-dal:
+    type: boolean
+    default: false
+  cli:
+    type: boolean
+    default: false
+  hashcracker-ingestor:
+    type: boolean
+    default: false
+  end2endtests:
+    type: boolean
+    default: false
+  scan-attribution-dal:
+    type: boolean
+    default: false
+  scanstatus-ingestor:
+    type: boolean
+    default: false
+  sandboxed-opa-runner:
+    type: boolean
+    default: false
+  filereputation:
+    type: boolean
+    default: false
+  filereputation-manager:
+    type: boolean
+    default: false
+  fetcher-dal:
+    type: boolean
+    default: false
+  tenant-monitor:
+    type: boolean
+    default: false
+  tenant-usagemetrics:
+    type: boolean
+    default: false
+  gqlgen:
+    type: boolean
+    default: false
+  gqlgen-backoffice:
+    type: boolean
+    default: false
+  proto:
+    type: boolean
+    default: false
+  iac-rego-lib:
+    type: boolean
+    default: false
+  wiz-terraform-provider:
+    type: boolean
+    default: false
+  securityinsight-dal:
+    type: boolean
+    default: false
+  artifact-dal:
+    type: boolean
+    default: false
+  artifact-fetcher:
+    type: boolean
+    default: false
+  artifact-scan-ingestor:
+    type: boolean
+    default: false
+  netscanner-coordinator:
+    type: boolean
+    default: false
+  netscanner-results-ingestor:
+    type: boolean
+    default: false
+  netscanner-serverless:
+    type: boolean
+    default: false
+  netscanner-screenshot:
+    type: boolean
+    default: false
+  securityinsight-dal-migrator:
+    type: boolean
+    default: false
+  postgres-updater:
+    type: boolean
+    default: false
+  threats-center-data:
+    type: boolean
+    default: false
+  auth-pretoken:
+    type: boolean
+    default: false
+  auth-msg:
+    type: boolean
+    default: false
+  datascan-dal:
+    type: boolean
+    default: false
+  datascan-dal-migrator:
+    type: boolean
+    default: false
+  host-configuration-dal:
+    type: boolean
+    default: false
+  validate-gosec:
+    type: boolean
+    default: false
+  admission-controller-dal:
+    type: boolean
+    default: false
+  wiz-admission-controller:
+    type: boolean
+    default: false
 
-references:
-  environment: &environment
+executors:
+  ubuntu-large-machine:
+    machine:
+      image: ubuntu-2004:202010-01
     environment:
-      # A flag for the demisto_client to not cache it's last response in order to avoid memory leaks
-      DONT_CACHE_LAST_RESPONSE: "true"
-      ARTIFACT_BUILD_NUM: << pipeline.parameters.artifact_build_num >>
-      CONTRIB_BRANCH: << pipeline.parameters.contrib_branch >>
-      CONTRIB_PACK_NAME: << pipeline.parameters.contrib_pack_name >>
-      SDK_REF: << pipeline.parameters.sdk_ref >>
-      # Giving different names to the following pipeline parameters to avoid collision, handling such collision case
-      # is done in 'Setup Environment' step.
-      PULL_REQUEST_NUMBER: << pipeline.parameters.pr_number >>
-      NIGHTLY_PARAMETER: << pipeline.parameters.nightly >>
-      GCS_MARKET_BUCKET: << pipeline.parameters.gcs_market_bucket >>
+      BUILDKIT_PROGRESS: plain
+      DOCKER_BUILDKIT: 1
+      GOPATH: "/go"
+    resource_class: large
 
+  ubuntu-2xlarge-machine:
+    machine:
+      image: ubuntu-2004:202010-01
+    environment:
+      BUILDKIT_PROGRESS: plain
+      DOCKER_BUILDKIT: 1
+      GOPATH: "/go"
+    resource_class: large
 
-  container_config: &container_config
+  ubuntu-arm-2xlarge:
+    machine:
+      image: ubuntu-2004:2022.04.1
+    environment:
+      BUILDKIT_PROGRESS: plain
+      DOCKER_BUILDKIT: 1
+      GOPATH: "/go"
+    resource_class: arm.xlarge
+
+  node:
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+      resource_class:
+        type: string
+        default: large
     docker:
-      - image: devdemisto/content-build:3.0.0.30555  # disable-secrets-detection
-        auth:
-          username: $DOCKERHUB_USER
-          password: $DOCKERHUB_PASSWORD
+      - image: << parameters.ecr_url >>/wiz-ci-node:<< pipeline.parameters.wiz_ci_node_tag >>
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=6144"
+    resource_class: << parameters.resource_class >>
 
-  workspace_root: &workspace_root
-    /home/circleci/
+  golang: &golang-executor
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-ci:<< pipeline.parameters.wiz_ci_tag >>
+        environment:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
+      - image: << parameters.ecr_url >>/postgresql:<< pipeline.parameters.postgresql_tag >>
+        environment:
+          POSTGRES_PASSWORD: justasstupidtestpassword!
+          POSTGRES_DB: postgres
+          PG_WAL_LEVEL: <<#pipeline.parameters.postgres-updater>>logical<</pipeline.parameters.postgres-updater>>
+      - image: redis
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+      - image: grokzen/redis-cluster:6.2.1
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+          MASTERS: 3
+          SLAVES_PER_MASTER: 1
+          INITIAL_PORT: 1000 # In CircleCI always use ports 1000-1005
 
-  store_artifacts: &store_artifacts
-     store_artifacts:
-        path: artifacts
-        destination: artifacts
-        when: always
+  golang-with-dynamo: &golang-with-dynamo-executor
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-ci:<< pipeline.parameters.wiz_ci_tag >>
+        environment:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
+      - image: << parameters.ecr_url >>/postgresql:<< pipeline.parameters.postgresql_tag >>
+        environment:
+          POSTGRES_PASSWORD: justasstupidtestpassword!
+          POSTGRES_DB: postgres
+      - image: amazon/dynamodb-local
+      - image: redis
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+      - image: grokzen/redis-cluster:6.2.1
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+          MASTERS: 3
+          SLAVES_PER_MASTER: 1
+          INITIAL_PORT: 1000 # In CircleCI always use ports 1000-1005
 
-  attach_workspace: &attach_workspace
-    attach_workspace:
-      at: *workspace_root
+  golang-with-redis:
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-ci:<< pipeline.parameters.wiz_ci_tag >>
+        environment:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
+      - image: << parameters.ecr_url >>/postgresql:<< pipeline.parameters.postgresql_tag >>
+        environment:
+          POSTGRES_PASSWORD: justasstupidtestpassword!
+          POSTGRES_DB: postgres
+      - image: amazon/dynamodb-local
+      - image: redis
+      - image: grokzen/redis-cluster:6.2.1
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+          MASTERS: 3
+          SLAVES_PER_MASTER: 1
+          INITIAL_PORT: 1000 # In CircleCI always use ports 1000-1005
 
-  add_ssh_keys: &add_ssh_keys
-    add_ssh_keys:
-      fingerprints:
-        - "02:df:a5:6a:53:9a:f5:5d:bd:a6:fc:b2:db:9b:c9:47" # disable-secrets-detection
-        - "f5:25:6a:e5:ac:4b:84:fb:60:54:14:82:f1:e9:6c:f9" # disable-secrets-detection
+  golang-with-janus: &golang-with-janus-executor
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-ci:<< pipeline.parameters.wiz_ci_tag >>
+        environment:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
+      - image: << parameters.ecr_url >>/postgresql:<< pipeline.parameters.postgresql_tag >>
+        environment:
+          POSTGRES_PASSWORD: justasstupidtestpassword!
+          POSTGRES_DB: postgres
+      - image: << parameters.ecr_url >>/janusgraph:<< pipeline.parameters.janusgraph_tag >>
+      - image: amazon/dynamodb-local
+      - image: redis
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+      - image: grokzen/redis-cluster:6.2.1
+        environment:
+          ALLOW_EMPTY_PASSWORD: yes
+          MASTERS: 3
+          SLAVES_PER_MASTER: 1
+          INITIAL_PORT: 1000 # In CircleCI always use ports 1000-1005
+    resource_class: large
 
-  prepare_environment: &prepare_environment
-    run:
-      name: Prepare Environment
-      when: always
-      command: |
-        # Check if CircleCI's config file and poetry files files are up to date
-        # if poetry isn't up-to-date, checkout from origin/master.
-        ./Tests/scripts/is_file_up_to_date.sh .circleci/config.yml $CIRCLE_BRANCH
-        ./Tests/scripts/is_file_up_to_date.sh poetry.lock $CIRCLE_BRANCH true
-        ./Tests/scripts/is_file_up_to_date.sh pyproject.toml $CIRCLE_BRANCH true
+  golang-python:
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/golang-python:<< pipeline.parameters.golang_python_tag >>
+    resource_class: small
 
-        echo 'export CIRCLE_ARTIFACTS="/home/circleci/project/artifacts"' >> $BASH_ENV
-        echo 'export PATH="/home/circleci/.local/bin:${PWD}/node_modules/.bin:${PATH}"' >> $BASH_ENV # disable-secrets-detection
-        echo 'export PYTHONPATH="/home/circleci/project:${PYTHONPATH}"' >> $BASH_ENV
-        echo 'export DEMISTO_README_VALIDATION=true' >> $BASH_ENV
-        echo 'export ENV_RESULTS_PATH=/home/circleci/project/artifacts/env_results.json' >> $BASH_ENV
-        echo 'export GCS_PRODUCTION_BUCKET="marketplace-dist"' >> $BASH_ENV
-        echo 'source /home/circleci/project/.circleci/content_release_vars.sh' >> $BASH_ENV
-        chmod +x .circleci/gitlab-ci-env-variables.sh
-        ./.circleci/gitlab-ci-env-variables.sh
-        if [ -n "${NIGHTLY_PARAMETER}" ] || [ -n "${LEGACY_NIGHTLY_PARAMETER}" ];
-        then
-            echo 'export NIGHTLY=true' >> $BASH_ENV
-        fi
+  replicator: 
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-1.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/image-replicator:028702b
+    resource_class: small
 
-        echo "=== sourcing $BASH_ENV ==="
-        source $BASH_ENV
-        sudo mkdir -p -m 777 $CIRCLE_ARTIFACTS/
+  golang-only: &golang-only-executor
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-ci:<< pipeline.parameters.wiz_ci_tag >>
+        environment:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
 
-        # Creating new clean logs folder
-        rm -rf $CIRCLE_ARTIFACTS/logs
-        mkdir -p $CIRCLE_ARTIFACTS/logs
+  golang-only-large:
+    <<: *golang-only-executor
+    resource_class: large
 
-        chmod +x ./Tests/scripts/*
-        chmod +x ./Tests/Marketplace/*
+  golang-only-xlarge:
+    <<: *golang-only-executor
+    resource_class: xlarge
 
-        if [ ! -e ".venv" ]; then
-          echo "installing venv"
-          NO_HOOKS=1 .hooks/bootstrap
-          source ./.venv/bin/activate
-        else
-          echo "venv exists (from cache). activating"
-          source ./.venv/bin/activate
-        fi
-        # store in bash env so we load our venv in each step
-        echo 'source /home/circleci/project/.venv/bin/activate' >> $BASH_ENV
-        git config diff.renameLimit 6000
+  golang-only-2xlarge:
+    <<: *golang-only-executor
+    resource_class: 2xlarge
 
-        echo "========== Build Parameters =========="
-        set | grep -E "^NIGHTLY=|^CONTRIB_BRANCH=|^SDK_REF"
-        python3 --version | tee -a $CIRCLE_ARTIFACTS/installed_python_libraries.txt
-        python3 -m pip list | tee -a $CIRCLE_ARTIFACTS/installed_python_libraries.txt
-        node --version
-        npm --version
-        demisto-sdk --version
+  golang-large:
+    <<: *golang-executor
+    resource_class: large
 
-  restore_cache: &restore_cache
-    restore_cache:
-      key: virtualenv-venv-{{ checksum "pyproject.toml" }}-{{ checksum "poetry.lock" }}-{{ checksum "package-lock.json" }}
+  golang-xlarge:
+    <<: *golang-executor
+    resource_class: xlarge
 
-  remote_docker: &remote_docker
-    setup_remote_docker:
-      version: 20.10.6
-      docker_layer_caching: true
+  golang-with-dynamo-xlarge:
+    <<: *golang-with-dynamo-executor
+    resource_class: xlarge
 
-  persist_to_workspace: &persist_to_workspace
-    persist_to_workspace:
-      root: /home/circleci/
-      paths:
-        - project
+  golang-with-janus-xlarge:
+    <<: *golang-with-janus-executor
+    resource_class: xlarge
 
-  secrets: &secrets
-    run:
-      name: Secrets
-      when: always
-      no_output_timeout: 5h
-      command: |
-        demisto-sdk secrets --post-commit --ignore-entropy
+  cypress-web:
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    docker:
+      - image: << parameters.ecr_url >>/wiz-cypress:<< pipeline.parameters.wiz_cypress_tag >>
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=6144"
+    resource_class: large
+  base:
+    docker:
+      - image: cimg/base:2022.02
+  deployer:
+    docker:
+      - image: cimg/go:1.16.6
 
-  validate_files_and_yaml: &validate_files_and_yaml
-    run:
-      name: Validate Files and Yaml
-      when: always
-      no_output_timeout: 1h
-      command: |
-        if [[ "$(echo "$GCS_MARKET_BUCKET" | tr '[:upper:]' '[:lower:]')" != "marketplace-dist" ]]; then
-          echo "Skipping the -Validate Files and Yaml- step when uploading to a test bucket."
-          exit 0
-        fi
+commands:
+  cached_checkout:
+    steps:
+      - run:
+          name: gen daily clone cache key
+          command: date +%F | tee /tmp/daily-clone-date
+      - restore_cache:
+          name: restore daily clone cache
+          keys:
+            - wiz-code-v1-{{ checksum "/tmp/daily-clone-date" }}
+      - swissknife/sk-checkout:
+          swissknife_sha: << pipeline.parameters.swissknife_sha >>
+      - run:
+          name: fetch origin/develop needed for diff puposes
+          command: git fetch --force origin develop
+      - save_cache:
+          name: save daily clone cache
+          key: wiz-code-v1-{{ checksum "/tmp/daily-clone-date" }}
+          paths:
+            - .git
 
-        ./Tests/scripts/linters_runner.sh
-        ./Tests/scripts/validate.sh
+  install_single_ssh_key:
+    parameters:
+      fingerprint:
+        type: string
+      host:
+        type: string
+    steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "<< parameters.fingerprint >>"
+      - run:
+          name: Setup ssh config << parameters.host >>
+          command: |
+            fingerprint="<< parameters.fingerprint >>"
+            id_file="~/.ssh/id_rsa_${fingerprint//:/}" #fingerprint without colons
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo "Host << parameters.host >>
+              Hostname github.com
+              IdentityFile $id_file
+              IdentitiesOnly yes" > ~/.ssh/config
 
-  run_unit_testing_and_lint: &run_unit_testing_and_lint
-    run:
-      name: Run Unit Testing and Lint
-      when: always
-      no_output_timeout: 5h
-      command: |
-        if [[ "$(echo "$GCS_MARKET_BUCKET" | tr '[:upper:]' '[:lower:]')" != "marketplace-dist" ]]; then
-          echo "Skipping validations when uploading to a test bucket."
-          exit 0
-        fi
+  install_ssh_keys:
+    description: Install SSH key for private repos
+    steps:
+      - run:
+          name: Install SSH key - ops
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitops
+              Hostname github.com
+              IdentityFile ~/.ssh/id_rsa_59d0d077232db7d9315096ccffef0ec8
+              IdentitiesOnly yes' > ~/.ssh/config
+      - run:
+          name: Install SSH key trivy-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_ddd9dc3112483c15f5208ef5e14dc48a
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key trivy-db-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz2
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_c88cba74482813c3d5814bbd31202b89
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-cis-benchmarks
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz3
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_b96f1beb505599f61ab7ca417f1706c7
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key scap
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz4
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_91d3a35555e3423336cf33ec510026b7
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key mbea
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz5
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_d7a55c42b4e7b2f431c3cc2725fc8022
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key fanal
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz6
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_c22789d74fa2eaaf67b733b63f533b0b
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-rpmdb-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz7
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_1bcd13404fd374b5c93b9dfc5da1c04b
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key structs-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz8
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_ccf20c139be1ecd8a14ca8fff7b8c77b
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key regparser-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz9
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_a2789bc43590a54bacb4ff596ef099dd
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key pe-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz10
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_5faa7085a5d63c0dda054d9f989d91f0
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-chimera
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz11
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_fc9a369000a67f4d5dec6e92bc8aa167
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-hivex
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz12
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_0a92078dbaf59135d540671a89193c62
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key websocket
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz13
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_5f4b8e5862502a6b384718f723b216e4
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key kicks
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz14
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_a9ff2c2ba73cc716ec8bf69e9e7f1d3c
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-version-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz15
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_918e61e5e803406e2685a77b3a4ba76d
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key gogit-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz17
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_fba08988ffad45402a28f06fc9faffa4
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key pkcs7-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz18
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_a0d6745aa9809120eebf511bd43b7562
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key kuberesolver
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz19
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_0f102801a13e6c3d5f9ae57ba96d583c
+              IdentitiesOnly yes' >> ~/.ssh/config
+      - run:
+          name: Install SSH key go-dep-parser-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz20
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_6f61eef53bea141977674de0ac1b85df
+              IdentitiesOnly yes' >> ~/.ssh/config
 
-        echo "demisto-sdk version: $(demisto-sdk --version)"
-        echo "mypy version: $(mypy --version)"
-        echo "flake8 py2 version: $(python2 -m flake8 --version)"
-        echo "flake8 py3 version: $(python3 -m flake8 --version)"
-        echo "bandit py2 version: $(python2 -m bandit --version 2>&1)"
-        echo "bandit py3 version: $(python3 -m bandit --version 2>&1)"
-        echo "vulture py2 version: $(python2 -m vulture --version 2>&1)"
-        echo "vulture py3 version: $(python3 -m vulture --version 2>&1)"
-        mkdir ./unit-tests
-        demisto-sdk lint -p 8 -g -vvv --test-xml ./unit-tests --log-path ./artifacts --failure-report ./artifacts --coverage-report $ARTIFACTS_FOLDER/coverage_report
+      - run:
+          name: Install SSH key testcontainers-go
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz21
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_5ffada9fe4fdfba33e72ad627fa96f41
+              IdentitiesOnly yes' >> ~/.ssh/config
 
-  generate_coverage_reports: &generate_coverage_reports
-    run:
-      name: Generate coverage reports
-      when: always
-      no_output_timeout: 1h
-      command: |
-        if [[ -f $ARTIFACTS_FOLDER/coverage_report/.coverage ]]; then
-          demisto-sdk coverage-analyze -i $ARTIFACTS_FOLDER/coverage_report/.coverage --report-dir $ARTIFACTS_FOLDER/coverage_report --report-type all --previous-coverage-report-url https://storage.googleapis.com/marketplace-dist-dev/code-coverage-reports/coverage-min.json
-          # Checks if the $XSOAR_BOT_TEST_CONTENT exist. for security reasons only non forked pr's have access to it.
-          if [[ -n $XSOAR_BOT_TEST_CONTENT ]]; then
-            echo "Adding unit tests coverage comment to the pr"
-            python3 ./Tests/scripts/add_pr_comment.py
-          fi
-        fi
+      - run:
+          name: Install SSH key go-containerregistry-wiz
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz22
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_17b2bb6a37c6cc68c8ef9ba5fdc79e6c
+              IdentitiesOnly yes' >> ~/.ssh/config
 
-  infrastructure_testing: &infrastructure_testing
-    run:
-      name: Infrastructure testing
-      when: always
-      command: |
-        python3 -m pytest ./Tests/scripts/infrastructure_tests/ -v
-        python3 -m pytest ./Tests/Marketplace/Tests/ -v
-        python3 -m pytest ./Tests/scripts/utils/tests -v
-        python3 -m pytest ./Tests/tests -v
-        python3 -m pytest ./Tests/private_build/tests -v
-        python3 -m pytest Utils -v
+  go_and_git_private_repo_config:
+    description: update GOPRIVATE and git renames for some internal repos
+    steps:
+      - run:
+          name: update GOPRIVATE and git renames for some internal repos
+          command: |
+            git config --global url."git@gitwiz:wiz-sec/trivy-wiz".insteadOf https://github.com/wiz-sec/trivy-wiz
+            git config --global url."git@gitwiz2:wiz-sec/trivy-db-wiz".insteadOf https://github.com/wiz-sec/trivy-db-wiz
+            git config --global url."git@gitwiz3:wiz-sec/go-cis-benchmarks".insteadOf https://github.com/wiz-sec/go-cis-benchmarks
+            git config --global url."git@gitwiz4:wiz-sec/scap".insteadOf https://github.com/wiz-sec/scap
+            git config --global url."git@gitwiz5:wiz-sec/mbea".insteadOf https://github.com/wiz-sec/mbea
+            git config --global url."git@gitwiz6:wiz-sec/fanal-wiz".insteadOf https://github.com/wiz-sec/fanal-wiz
+            git config --global url."git@gitwiz7:wiz-sec/go-rpmdb-wiz".insteadOf https://github.com/wiz-sec/go-rpmdb-wiz
+            git config --global url."git@gitwiz8:wiz-sec/structs-wiz".insteadOf https://github.com/wiz-sec/structs-wiz
+            git config --global url."git@gitwiz9:wiz-sec/regparser-wiz".insteadOf https://github.com/wiz-sec/regparser-wiz
+            git config --global url."git@gitwiz10:wiz-sec/pe-wiz".insteadOf https://github.com/wiz-sec/pe-wiz
+            git config --global url."git@gitwiz11:wiz-sec/go-chimera".insteadOf https://github.com/wiz-sec/go-chimera
+            git config --global url."git@gitwiz12:wiz-sec/go-hivex".insteadOf https://github.com/wiz-sec/go-hivex
+            git config --global url."git@gitwiz13:wiz-sec/websocket".insteadOf https://github.com/wiz-sec/websocket
+            git config --global url."git@gitwiz14:wiz-sec/kics".insteadOf https://github.com/wiz-sec/kics
+            git config --global url."git@gitwiz15:wiz-sec/go-version-wiz".insteadOf https://github.com/wiz-sec/go-version-wiz
+            git config --global url."git@gitwiz17:wiz-sec/gogit-wiz".insteadOf https://github.com/wiz-sec/gogit-wiz
+            git config --global url."git@gitwiz18:wiz-sec/pkcs7-wiz".insteadOf https://github.com/wiz-sec/pkcs7-wiz
+            git config --global url."git@gitwiz19:wiz-sec/kuberesolver".insteadOf https://github.com/wiz-sec/kuberesolver
+            git config --global url."git@gitwiz20:wiz-sec/go-dep-parser-wiz".insteadOf https://github.com/wiz-sec/go-dep-parser-wiz
+            git config --global url."git@gitwiz21:wiz-sec/testcontainers-go".insteadOf https://github.com/wiz-sec/testcontainers-go
+            git config --global url."git@gitwiz22:wiz-sec/go-containerregistry-wiz".insteadOf https://github.com/wiz-sec/go-containerregistry-wiz
 
-        if [ -n "${DEMISTO_SDK_NIGHTLY}" ] ; then
-          ./Tests/scripts/sdk_pylint_check.sh
-        fi
+            go env -w GOPRIVATE=github.com/wiz-sec/*
+            go env -w GO111MODULE="on"
 
-  create_id_set: &create_id_set
-    run:
-      name: Create ID Set
-      when: always
-      command: |
-        demisto-sdk create-id-set -o ./Tests/id_set.json --fail-duplicates
-        cp ./Tests/id_set.json $CIRCLE_ARTIFACTS
+  copy_ssh_keys_to_user_root:
+    description: Copy SSH keys to user root
+    steps:
+      - run:
+          name: Copy .ssh to user root
+          command: |
+            sudo cp -fr ~/.ssh /root/
 
-  merge_public_and_private_id_sets: &merge_public_and_private_id_sets
-    run:
-      name: Merge public and private ID sets
-      when: always
-      command: |
-        if [[ $CIRCLE_BRANCH =~ pull/[0-9]+ ]]; then
-            echo "Skipping, Should not run on contributor's branch."
+  enable_private_repo_access:
+    description: Enable private repo access
+    steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "59:d0:d0:77:23:2d:b7:d9:31:50:96:cc:ff:ef:0e:c8"
+            - "dd:d9:dc:31:12:48:3c:15:f5:20:8e:f5:e1:4d:c4:8a"
+            - "c8:8c:ba:74:48:28:13:c3:d5:81:4b:bd:31:20:2b:89"
+            - "b9:6f:1b:eb:50:55:99:f6:1a:b7:ca:41:7f:17:06:c7"
+            - "91:d3:a3:55:55:e3:42:33:36:cf:33:ec:51:00:26:b7"
+            - "d7:a5:5c:42:b4:e7:b2:f4:31:c3:cc:27:25:fc:80:22"
+            - "c2:27:89:d7:4f:a2:ea:af:67:b7:33:b6:3f:53:3b:0b"
+            - "1b:cd:13:40:4f:d3:74:b5:c9:3b:9d:fc:5d:a1:c0:4b"
+            - "cc:f2:0c:13:9b:e1:ec:d8:a1:4c:a8:ff:f7:b8:c7:7b"
+            - "a2:78:9b:c4:35:90:a5:4b:ac:b4:ff:59:6e:f0:99:dd"
+            - "5f:aa:70:85:a5:d6:3c:0d:da:05:4d:9f:98:9d:91:f0"
+            - "fc:9a:36:90:00:a6:7f:4d:5d:ec:6e:92:bc:8a:a1:67"
+            - "0a:92:07:8d:ba:f5:91:35:d5:40:67:1a:89:19:3c:62"
+            - "5f:4b:8e:58:62:50:2a:6b:38:47:18:f7:23:b2:16:e4"
+            - "a9:ff:2c:2b:a7:3c:c7:16:ec:8b:f6:9e:9e:7f:1d:3c"
+            - "91:8e:61:e5:e8:03:40:6e:26:85:a7:7b:3a:4b:a7:6d"
+            - "fb:a0:89:88:ff:ad:45:40:2a:28:f0:6f:c9:fa:ff:a4"
+            - "a0:d6:74:5a:a9:80:91:20:ee:bf:51:1b:d4:3b:75:62"
+            - "0f:10:28:01:a1:3e:6c:3d:5f:9a:e5:7b:a9:6d:58:3c"
+            - "6f:61:ee:f5:3b:ea:14:19:77:67:4d:e0:ac:1b:85:df"
+            - "5f:fa:da:9f:e4:fd:fb:a3:3e:72:ad:62:7f:a9:6f:41"
+            - "17:b2:bb:6a:37:c6:cc:68:c8:ef:9b:a5:fd:c7:9e:6c"
+      - install_ssh_keys
+      - go_and_git_private_repo_config
+
+  validate_gqlgen:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v13-validategql-{{ checksum "gqlgen/go.mod" }}-{{ checksum "web/yarn.lock" }}
+            - go-mod-v13-validategql
+      - restore_cache:
+          keys:
+            - gqlgen-last-successful-v1-develop
+      - run:
+          name: Validate GQLGen is up to date
+          command: |
+            pushd web && yarn install --frozen-lockfile && popd
+            export OUTPUTS_FOLDER=/tmp/generation-logs
+            mkdir -p $OUTPUTS_FOLDER
+            cd gqlgen && ./gen.sh
+
+            if [[ $(git diff --name-only | grep -v "go.sum" | grep -v "go.mod") != '' ]]; then
+              echo 'gqlgen is NOT up to date, failing. Diff is:'
+              echo "$(git diff --name-only | grep -v 'go.sum' | grep -v 'go.mod')"
+              exit 1
+            fi
+            mkdir -p /tmp/gqlgen/
+            echo $CIRCLE_SHA1 > /tmp/gqlgen/last_succesful.txt
             exit 0
-        fi
+      - store_artifacts:
+          path: /tmp/generation-logs
+      - save_cache:
+          key: go-mod-v13-validategql-{{ checksum "gqlgen/go.mod" }}-{{ checksum "web/yarn.lock" }}
+          paths:
+            - /go/pkg/mod
+            - ~/project/web/node_modules
+            - ~/.cache/go-build
+      - when:
+          condition:
+            equal: [develop, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: gqlgen-last-successful-v1-develop-{{ checksum "/tmp/gqlgen/last_succesful.txt" }}
+                paths:
+                  - /tmp/gqlgen
 
-        # Download private ID set
-        gsutil cp gs://marketplace-dist/content/private_id_set.json $CIRCLE_ARTIFACTS/unified_id_set.json
-        echo "successfully downloaded private ID set"
+  validate_backoffice_gqlgen:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v11-validatebackofficegql-{{ checksum "gqlgen/go.mod" }}-{{ checksum "web/yarn.lock" }}
+            - go-mod-v11-validatebackofficegql
+      - restore_cache:
+          keys:
+            - gqlgen-backoffice-last-successful-v1-develop
+      - run:
+          name: Validate Backoffice GQLGen is up to date
+          command: |
+            pushd web && yarn install --frozen-lockfile && popd
+            export OUTPUTS_FOLDER=/tmp/generation-logs-backoffice
+            mkdir -p $OUTPUTS_FOLDER
+            cd gqlgen-backoffice && ./gen.sh
 
-        # Merge public and private ID sets
-        demisto-sdk merge-id-sets -i1 ./Tests/id_set.json -i2 $CIRCLE_ARTIFACTS/unified_id_set.json -o $CIRCLE_ARTIFACTS/unified_id_set.json
-        echo "successfully merged public and private ID sets"
+            if [[ $(git diff --name-only | grep -v "go.sum" | grep -v "go.mod") != '' ]]; then
+              echo 'gqlgen-backoffice is NOT up to date, failing. Diff is:'
+              echo "$(git diff --name-only | grep -v 'go.sum' | grep -v 'go.mod')"
+              exit 1
+            fi
+            mkdir -p /tmp/gqlgen-backoffice/
+            echo $CIRCLE_SHA1 > /tmp/gqlgen-backoffice/last_succesful.txt
+            exit 0
+      - store_artifacts:
+          path: /tmp/generation-logs-backoffice
+      - save_cache:
+          key: go-mod-v11-validatebackofficegql-{{ checksum "gqlgen/go.mod" }}-{{ checksum "web/yarn.lock" }}
+          paths:
+            - /go/pkg/mod
+            - ~/project/web/node_modules
+            - ~/.cache/go-build
+      - when:
+          condition:
+            equal: [develop, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: gqlgen-backoffice-last-successful-v1-develop-{{ checksum "/tmp/gqlgen-backoffice/last_succesful.txt" }}
+                paths:
+                  - /tmp/gqlgen-backoffice
 
-  get_contribution_pack: &get_contribution_pack
-    when:
-      condition: << pipeline.parameters.contrib_branch >>
-      steps:
-        - run:
-            name: Get Contributor pack
-            when: always
-            command: |
-                REPO=$(echo $CONTRIB_BRANCH | cut -d ":" -f 1)
-                BRANCH=$(echo $CONTRIB_BRANCH | cut -d ":" -f 2)
-                python3 ./Utils/update_contribution_pack_in_base_branch.py -p $PULL_REQUEST_NUMBER -b $BRANCH -c $REPO
+  validate_proto:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v6-{{ arch }}-validateproto
+      - run:
+          name: Validate Protobuf is up to date
+          command: |
+            pushd proto && ./gen.sh && popd
 
-  comment_on_contrib_pr: &comment_on_contrib_pr
-    when:
-      condition: << pipeline.parameters.contrib_branch >>
-      steps:
-        - run:
-            name: Comment on the contribution Pull Request
-            when: always
-            command: |
-              SERVER_URL=$(jq -r 'select(.[].Role == "Server Master") | .[].InstanceDNS' $ENV_RESULTS_PATH)
-              python3 ./Utils/comment_on_pr.py -p $PULL_REQUEST_NUMBER -c "Instance is ready. Server link: https://$SERVER_URL, Build link: $CIRCLE_BUILD_URL"
+            if [[ $(git diff --name-only | grep -v -E 'go\.mod$|go\.sum$|\.buildme/.*trigger$') != '' ]]; then
+              echo 'protobuf is NOT up to date, failing. Diff is:'
+              echo "$(git diff --name-only | grep -v -E 'go\.mod$|go\.sum$|\.buildme/.*trigger$')"
+              exit 1
+            fi
 
-  nightly_jobs: &nightly_jobs
-    - Setup Environment:
-        context: nightly_env
-    - Run Unit Testing And Lint:
-        context: nightly_env
-        requires:
-          - Setup Environment
-    - Run Validations:
-        requires:
-          - Setup Environment
+            # Validate there are no breaking changes using buf
+            if [[ ${CIRCLE_BRANCH} != 'develop' ]]; then
+              # Download buf
+              export BUF_VERSION="1.6.0"
+              curl -sSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-$(uname -s)-$(uname -m)" -o buf && chmod +x buf
 
+              # fetch develop, so we can compare it with the current branch
+              git branch -D develop && git fetch origin develop && git checkout -b develop origin/develop
+
+              # re-checkout our branch, this is our input
+              git checkout ${CIRCLE_BRANCH}
+
+              # try to merge develop into our branch, if conflict arises, revert and continue to validation anyway
+              # do this only for WZ-* branches, we don't want to do that in any other special branch (like integration etc..)
+              if [[ "${CIRCLE_BRANCH}" =~ ^(.*/)?[Ww][Zz]-.* ]]; then
+                echo 'Merging develop in here, as an optimization to save you an update-branch click'
+                git config user.email "wiz@circleci.com"
+                git config user.name "wiz@circleci.com"
+                git merge develop --no-commit || git merge --abort
+              fi
+
+              ./buf breaking proto --against '.git#branch=develop,subdir=proto' --config buf.yaml
+            fi
+
+            exit 0
+      - save_cache:
+          key: go-mod-v6-{{ arch }}-validateproto
+          paths:
+            - /go/pkg/mod
+
+  validate_gosec:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: "Install the latest gosec"
+          command: |
+            go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - run:
+          name: Running gosec
+          command: |
+            gosec -quiet -concurrency 8 -nosec=false -confidence=high -severity=high ./...
+
+  validate_deps:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v5-{{ arch }}-validatedeps
+      - run:
+          name: Validate dependencies
+          command: |
+            export branch=origin/$(git rev-parse --abbrev-ref HEAD)
+            export GOFLAGS=-mod=mod
+            source validatedeps.sh
+      - save_cache:
+          key: go-mod-v5-{{ arch }}-validatedeps
+          paths:
+            - /go/pkg/mod
+
+  validate_nativetypes:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v5-{{ arch }}-nativetypes
+      - run:
+          name: Validate NativeTypes generated properly
+          command: |
+            pushd nativetypelib/gen
+            if ! ./gen.sh; then
+              exit 1
+            fi
+            popd
+
+            if [[ $(git diff --name-only | grep -v -E '\.buildme/.*trigger$') != '' ]]; then
+              echo 'nativetypes are NOT up to date, failing. Diff is:'
+              echo "$(git diff --name-only | grep -v -E '\.buildme/.*trigger$')"
+              exit 1
+            fi
+
+            exit 0
+      - save_cache:
+          key: go-mod-v5-{{ arch }}-nativetypes
+          paths:
+            - /go/pkg/mod
+
+  validate_component_registration:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Validate component registration
+          command: |
+            cd commonlib
+            GOFLAGS="-mod=mod" go test -test.v -test.paniconexit0 -test.run 'TestAllComponentsAreRegistered'
+
+  validate_deployed_binary_version:
+    parameters:
+      binary_package_name:
+        type: string
+      version_file_name:
+        type: string
+        default: VERSION
+      skip_patch_version:
+        type: boolean
+        default: false
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Validate version file
+          environment:
+            BRANCH: << pipeline.git.branch >>
+            PACKAGE_NAME: << parameters.binary_package_name >>
+            VERSIONS_FILE_NAME: << parameters.version_file_name >>
+            SKIP_PATCH_VERSION: << parameters.skip_patch_version >>
+          command: bash ~/project/.circleci/scripts/validate_deployed_binary_version.sh
+
+  validate_sql_migrations:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Validate only async sql migrations create indices
+          command: |
+            set +eo pipefail
+
+            git fetch origin develop
+
+            migrations_creating_indices=$(
+              git log --name-only --pretty= origin/develop.. -- '*-dal/sql/*.sql' |
+              sort |
+              uniq |
+              xargs grep -Pzil '(?:create[[:space:]]*index)|(?:reindex[[:space:]])' 2>/dev/null
+            )
+
+            if [[ -n "$migrations_creating_indices" ]]; then
+              echo "Failing - found non-async migrations that create indices: "
+              echo "========================================================="
+              echo
+              echo "$migrations_creating_indices"
+              echo
+              echo "Move index creation migrations to <my-dal>/sql-async/V<version>__<migration>.sql"
+              echo "Async migration versions are standalone, start with V1 or continue from the last version available"
+              echo "(also make sure runAsyncMigrator is set in <my-dal>/values/chart-values.yaml.gotmpl in ops)"
+              exit 1
+            fi
+
+            echo "All good"
+            exit 0
+
+  sync_components_to_ops:
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Sync components to ops repository
+          command: |
+            export OPS_REPO="git@gitops:wiz-sec/ops.git"
+            export WIZ_PATH=$(eval echo $CIRCLE_WORKING_DIRECTORY)
+            export CURRENT_WIZ_COMMIT="${CIRCLE_SHA1}"
+            export CURRENT_BRANCH="${CIRCLE_BRANCH}"
+            export DRY_RUN=false
+
+            cd .circleci
+            bash sync_components.sh
+
+  save_version_to_ops:
+    parameters:
+      package_name:
+        type: string
+        default: "[^:]+"
+      packages_filename:
+        type: string
+        default: ""
+      versions_files_path:
+        type: string
+        default: "deployment/versions/"
+      non_deployable_packages:
+        type: string
+        default: "^buildlibs|^diskanalyzerlib|^datascanlib|^validate$"
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Commit versions YAML to ops repository
+          command: |
+            echo "[INFO] setup parameters"
+            export PACKAGES_FILE="<<parameters.packages_filename>>"
+            export PKG_REGEX="<<parameters.package_name>>"
+            export NON_DEPLOYABLE_PACKAGES="<<parameters.non_deployable_packages>>"
+            export VERSIONS_FILE_PREFIX="<<parameters.versions_files_path>>"
+            export  OPS_REPO="git@gitops:wiz-sec/ops.git"
+            export WIZ_PATH=$( eval echo $CIRCLE_WORKING_DIRECTORY )
+            export CURRENT_WIZ_COMMIT="${CIRCLE_SHA1}"
+            export CURRENT_BRANCH=${CIRCLE_BRANCH}
+            export DRY_RUN=false
+
+            echo "[INFO] running script"
+            cd .circleci
+            bash sync_versions.sh
+
+  validate_gql_schema:
+    parameters:
+      variant:
+        type: string
+    steps:
+      - run:
+          name: Validate wiz schema
+          command: |
+            # we cant pass env to commands through $BASH_ENV, so we must pass it to a temp file
+            VARIANT=$(cat /tmp/VARIANT 2>/dev/null || true)
+            if [[ -z "${VARIANT}" ]]; then
+              VARIANT="<<parameters.variant>>"
+            fi
+            echo "Variant chosen as ${VARIANT}"
+            cd gqlgen
+            ./apollo-gen.sh
+            ./apollo-validate.sh ${VARIANT}
+          when: always
+      - store_artifacts:
+          path: /tmp/validation-artifacts
+
+  validate_gql_schema_prod:
+    parameters:
+      rover-key-type:
+        type: string
+    steps:
+      - restore_cache:
+          keys:
+            - slack_libs_python_v1
+      - run:
+          name: install slack message script libs
+          command: |
+            mkdir -p $PIP_CACHE_DIR
+            pip3 install boto3==1.24.8 slack_sdk==3.19.1
+          environment:
+            PIP_CACHE_DIR: /tmp/pip_cache
+      - save_cache:
+          key: slack_libs_python_v1
+          paths:
+            - /tmp/pip_cache
+      - run:
+          name: Validate wiz gql schema against prod <<parameters.rover-key-type>>
+          command: |
+            git clone git@gitops:wiz-sec/ops.git ../ops/
+            ./gqlgen/apollo-validate-prod.sh ../ops/terraform/modules/env_config/prod.yaml "<<parameters.rover-key-type>>" "$(pwd)" "$(realpath ../ops/)"
+      - store_artifacts:
+          path: /tmp/errors_output
+
+  validate_backoffice_gql_schema:
+    parameters:
+      variant:
+        type: string
+      app-type:
+        type: string
+    steps:
+      - run:
+          name: Validate backoffice schema
+          command: |
+            # we cant pass env to commands through $BASH_ENV, so we must pass it to a temp file
+            VARIANT=$(cat /tmp/VARIANT 2>/dev/null || true)
+            if [[ -z "${VARIANT}" ]]; then
+              VARIANT="<<parameters.variant>>"
+            fi
+            echo "Variant chosen as ${VARIANT}"
+            cd gqlgen-backoffice
+            ./apollo-gen.sh
+            ./apollo-validate.sh ${VARIANT}
+          when: always
+      - store_artifacts:
+          path: /tmp/validation-artifacts-backoffice
+
+  update_gql_schema:
+    parameters:
+      variant:
+        type: string
+    steps:
+      - enable_private_repo_access
+      - run:
+          name: generate gql schemas
+          command: |
+            cd ~/project/gqlgen && ./apollo-gen.sh && cd ~/project
+      - run:
+          name: Commit gql schemas to ops repository
+          command: bash .circleci/sync_schema.sh
+
+  update_backoffice_gql_schema:
+    steps:
+      - enable_private_repo_access
+      - run:
+          name: generate backoffice gql schemas
+          command: |
+            cd ~/project/gqlgen-backoffice && ./apollo-gen.sh && cd ~/project
+      - run:
+          name: Commit gql schemas to ops repository
+          command: |
+            git clone -b ${CIRCLE_BRANCH} git@gitops:wiz-sec/ops.git
+            git config --global user.email "circleci@wiz.io"
+            git config --global user.name "CircleCI"
+            # save dc graphql-schemas to charts folder
+            cd ./gqlgen-backoffice/apollo/dc/
+            for graphql in *.graphql; do find ../../../ops/deployment/backend/*-${graphql%.*} -maxdepth 5 -type d -name 'backoffice-gql-schema' -exec cp $graphql {} + ; done
+            # save global graphql-schemas to charts folder
+            cd ../../../gqlgen-backoffice/apollo/global/
+            for graphql in *.graphql; do find ../../../ops/deployment/global/*-${graphql%.*} -maxdepth 5 -type d -name 'backoffice-gql-schema' -exec cp $graphql {} + ; done
+            # save schema to relevant common charts
+            for graphql in *.graphql; do
+              chart_dir=../../../ops/deployment/common/charts/${graphql%.*}
+              if [ -d $chart_dir ]; then
+                find $chart_dir -maxdepth 5 -type d -name 'backoffice-gql-schema' -exec cp $graphql {} +
+              fi
+            done
+            cd ../../../ops/deployment/
+            find . -maxdepth 6 -type f -name '*.graphql' -exec git add {} \;
+            # Commit changes only if there are any
+            git diff --quiet && git diff --staged --quiet || (git commit -a -m "[skip ci] CircleCI: Push new backoffice gql schema ${CIRCLE_SHA1}" && git push)
+  scan_image_with_wizcli:
+    parameters:
+      image:
+        type: string
+      policy:
+        type: string
+        default: "Wiz policy"
+    steps:
+      - run:
+          name: Download wizcli
+          command: |
+            sudo mkdir -p /wizcli
+            sudo curl -o /wizcli/wizcli https://wizcli.app.wiz.io/wizcli
+            sudo chmod +x /wizcli/wizcli
+      - run: date +%F > date
+      - restore_cache:
+          key: wizcli-v1-{{ .Environment.WIZCLI_ID }}-{{ checksum "date" }}
+      - run:
+          name: Scan Docker image
+          command: |
+            set +eo pipefail
+            /wizcli/wizcli --no-style --log=/tmp/scan.log docker scan --image << parameters.image >> --policy "<< parameters.policy >>"
+            exitCode=$?
+            if [[ $exitCode -eq 3 ]]; then
+              # Time to authenticate!
+              /wizcli/wizcli --no-style auth --id ${WIZCLI_ID} --secret ${WIZCLI_SECRET}
+              /wizcli/wizcli --no-style --log=/tmp/scan.log docker scan --image << parameters.image >> --policy "<< parameters.policy >>"
+              exitCode=$?
+            fi
+            exit $exitCode
+      - save_cache:
+          key: wizcli-v1-{{ .Environment.WIZCLI_ID }}-{{ checksum "date" }}
+          paths:
+            - ~/.wiz/auth.json
+      - store_artifacts:
+          path: /tmp/scan.log
+          destination: scan.log
+
+  login_to_ecr:
+    parameters:
+      region:
+        type: string
+        default: ${AWS_REGION}
+      aws_access_key:
+        type: string
+        default: ${AWS_ACCESS_KEY_ID}
+      aws_access_key_secret:
+        type: string
+        default: ${AWS_SECRET_ACCESS_KEY}
+      aws_ecr_account_url:
+        type: string
+        default: ${AWS_ECR_ACCOUNT_URL}
+    steps:
+      - run:
+          name: Login to ECR << parameters.aws_ecr_account_url >>
+          command: |
+            export AWS_PAGER=""
+            export AWS_REGION=<< parameters.region >>
+            export TARGET_AWS_ECR_ACCOUNT_URL=<< parameters.aws_ecr_account_url >>
+            export AWS_ACCESS_KEY_ID=<< parameters.aws_access_key >>
+            export AWS_SECRET_ACCESS_KEY=<< parameters.aws_access_key_secret >>
+            echo "Logging in to https://$TARGET_AWS_ECR_ACCOUNT_URL"
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin https://$TARGET_AWS_ECR_ACCOUNT_URL
+
+  push_to_ecr:
+    parameters:
+      ecr_prefix:
+        type: string
+        default: beyond
+      package_name:
+        type: string
+      region:
+        type: string
+        default: us-east-2
+      aws_access_key:
+        type: string
+      aws_access_key_secret:
+        type: string
+      aws_ecr_account_url:
+        type: string
+      push_tag_only:
+        type: boolean
+        default: false
+      tag:
+        type: string
+        default: << pipeline.git.revision >>
+    steps:
+      - login_to_ecr:
+          region: << parameters.region >>
+          aws_access_key: << parameters.aws_access_key >>
+          aws_access_key_secret: << parameters.aws_access_key_secret >>
+          aws_ecr_account_url: << parameters.aws_ecr_account_url >>
+      - run:
+          name: push to ECR << parameters.aws_ecr_account_url >>
+          environment:
+            PACKAGE_NAME: << parameters.package_name >>
+            ECR_PREFIX: << parameters.ecr_prefix >>
+            REGISTRY_TYPE: ecr
+            BRANCH_NAME: << pipeline.git.branch >>
+            PUSH_TAG_ONLY: << parameters.push_tag_only >>
+          command: |
+            export COMMIT_SHA=${CIRCLE_SHA1}
+            export AWS_PAGER=""
+            export AWS_REGION=<< parameters.region >>
+            export AWS_ACCESS_KEY_ID=<< parameters.aws_access_key >>
+            export AWS_SECRET_ACCESS_KEY=<< parameters.aws_access_key_secret >>
+            export TARGET_AWS_ECR_ACCOUNT_URL=<< parameters.aws_ecr_account_url >>
+            export REMOTE_DOCKER_REGISTRY=$TARGET_AWS_ECR_ACCOUNT_URL/$ECR_PREFIX
+            export TAG=<< parameters.tag >>
+            bash .circleci/docker_push.sh
+
+  install_git_lfs:
+    description: Install GIT-LFS
+    steps:
+      - run:
+          name: Install GIT-LFS
+          command: sudo apt update && sudo apt upgrade git -y && sudo apt install git-lfs -y
+
+  replicate_image:
+    parameters:
+      package_name:
+        type: string
+      tag:
+        type: string
+      target_gov:
+        type: boolean
+        default: true
+      target_azure:
+        type: boolean
+        default: true
+      target_fedtest:
+        type: boolean
+        default: true
+      target_netscanner_gov:
+        type: boolean
+        default: true
+      target_auth_gov:
+        type: boolean
+        default: true
+      target_netscanner_fedtest:
+        type: boolean
+        default: true
+      target_netscanner_fedramp:
+        type: boolean
+        default: true
+      target_auth_fedtest:
+        type: boolean
+        default: true
+      target_auth_fedramp:
+        type: boolean
+        default: true
+
+    steps:
+      - run:
+          name: 🎞️ Trigger image replication
+          environment:
+            DOCKER_TAG: << parameters.tag >>
+            COMMIT_SHA: <<pipeline.parameters.swissknife_sha >>
+            PACKAGE_NAME: << parameters.package_name >>
+          command: |
+            export TARGET_GOV="<< parameters.target_gov >>"
+            export TARGET_AZURE="<< parameters.target_azure >>"
+            export TARGET_FEDTEST="<< parameters.target_fedtest >>"
+
+            export TARGET_NETSCANNER_GOV="<< parameters.target_netscanner_gov >>"
+            export TARGET_AUTH_GOV="<< parameters.target_auth_gov >>"
+            export TARGET_NETSCANNER_FEDTEST="<< parameters.target_netscanner_fedtest >>"
+            export TARGET_NETSCANNER_FEDRAMP="<< parameters.target_netscanner_fedramp >>"
+            export TARGET_AUTH_FEDTEST="<< parameters.target_auth_fedtest >>"
+            export TARGET_AUTH_FEDRAMP="<< parameters.target_auth_fedramp >>"
+
+            bash .circleci/scripts/replicate_image.sh
 
 jobs:
-  Setup Environment:
-    <<: *container_config
-    resource_class: medium
-    <<: *environment
+  validate-gqlgen:
+    working_directory: ~/project
+    executor: golang-only-2xlarge
     steps:
-      - checkout
-      - *restore_cache
-      - *prepare_environment
+      - validate_gqlgen
+
+  validate-gqlgen-backoffice:
+    working_directory: ~/project
+    executor: golang-only-2xlarge
+    steps:
+      - validate_backoffice_gqlgen
+
+  validate-proto:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_proto
+
+  validate-gosec:
+    working_directory: ~/project
+    executor: golang-only-xlarge
+    steps:
+      - validate_gosec
+
+  validate-deps:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_deps
+
+  validate-nativetypes:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_nativetypes
+
+  validate-component-registration:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_component_registration
+
+  validate-sql-migrations:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_sql_migrations
+
+  validate-wizcli-version:
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - validate_deployed_binary_version:
+          binary_package_name: cli
+
+  validate-operator-generated:
+    working_directory: ~/project
+    executor: golang-only
+    parameters:
+      package_name:
+        type: string
+      validate_local_chart_generation:
+        type: boolean
+        default: false
+        description: |
+          Relevant only for charts that are pushed to the same repo as the component
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v1-{{ arch }}-operator-<< parameters.package_name >>
+      - run:
+          name: Generate
+          command: |
+            cd << parameters.package_name >>
+            make generate
+      - when:
+          condition:
+            equal: [true, << parameters.validate_local_chart_generation >>]
+          steps:
+            - run:
+                name: Build chart
+                command: |
+                  cd << parameters.package_name >>
+                  task build-chart
+      - run:
+          name: Validate no changes
+          command: |
+            if [[ $(git diff --name-only | grep -v "go.sum" | grep -v "go.mod") != '' ]]; then
+              echo 'Diff is:'
+              echo "$(git diff --name-only | grep -v "go.sum" | grep -v "go.mod")"
+              exit 1
+            fi
       - save_cache:
+          key: go-mod-v1-{{ arch }}-operator-<< parameters.package_name >>
           paths:
-            - .venv
-            - node_modules
-          key: virtualenv-venv-{{ checksum "pyproject.toml" }}-{{ checksum "poetry.lock" }}-{{ checksum "package-lock.json" }}
-      - *get_contribution_pack
-      - *add_ssh_keys
-      - *persist_to_workspace
+            - /go/pkg/mod
 
-  Run Unit Testing And Lint:
-    <<: *container_config
-    resource_class: medium
-    <<: *environment
+  build-golang:
+    parameters:
+      package_name:
+        type: string
+      executor_type:
+        type: string
+        default: golang
+      push_to_ecr:
+        type: boolean
+        default: true
+      push_to_netscanner_ecr:
+        type: boolean
+        default: false
+      push_to_auth_ecr:
+        type: boolean
+        default: false
+      push_to_acr:
+        type: boolean
+        default: true
+      build_docker_image:
+        type: boolean
+        default: true
+      use_private_repo:
+        type: boolean
+        default: true
+      wiz_ci_arm:
+        type: boolean
+        default: false
+      push_tag_only:
+        type: boolean
+        default: false
+      tag:
+        type: string
+        default: << pipeline.parameters.swissknife_sha >>
+      replicate_image:
+        type: boolean
+        default: true
+    working_directory: ~/project
+    executor: << parameters.executor_type >>
     steps:
-      - *attach_workspace
-      - *remote_docker
-      - *restore_cache
-      - *add_ssh_keys
-      - *prepare_environment
-      - *infrastructure_testing
-      - *run_unit_testing_and_lint
-      - *generate_coverage_reports
-      - store_test_results:
-          path: ./unit-tests
-      - *store_artifacts
+      - aws-cli/configure:
+          aws-region: AWS_REGION
+      - cached_checkout
+      # If it's a machine executor (when we can't run tests in a container), don't setup remote docker,
+      # and install dependencies for diskanalayzer tests.
+      - when:
+          condition:
+            and:
+              - << parameters.build_docker_image >>
+              - not:
+                  matches:
+                    pattern: "^(.*-machine|ubuntu-arm-.*)$"
+                    value: << parameters.executor_type >>
+          steps:
+            - setup_remote_docker:
+                docker_layer_caching: false
+      - run:
+          name: generate go build cache keys
+          command: |
+            date +%F | tee /tmp/daily-date
+            date +%U | tee /tmp/week-number
+      - when:
+          condition:
+            and:
+              - matches:
+                  pattern: "^.*-machine$"
+                  value: << parameters.executor_type >>
+              - not: << parameters.wiz_ci_arm >>
+          steps:
+            - run:
+                name: "Creating directory for GOPATH and override it to be /go"
+                command: |
+                  sudo mkdir -p /go && sudo chmod 777 /go
+                  echo 'export GOPATH=/go' >> ~/.circlerc
+                  go env -w GOPATH=/go
+            - run:
+                name: "Install dependencies for diskanalayzer & diskanalayzerlib tests (Also OCR for end2endtests)."
+                command: |
+                  GIT_ROOT=$(git rev-parse --show-toplevel)
+                  bash ${GIT_ROOT}/.circleci/scripts/install_diskanalyzerlib_deps.sh
+      - when:
+          condition:
+            matches:
+              pattern: "^(.*-machine|ubuntu-arm-.*)$"
+              value: << parameters.executor_type >>
+          steps:
+            - run:
+                name: Install Taskfile
+                command: |
+                  GIT_ROOT=$(git rev-parse --show-toplevel)
+                  bash ${GIT_ROOT}/.circleci/scripts/install_taskfile.sh
+      - restore_cache:
+          name: restore << parameters.package_name >> go mod cache
+          keys:
+            - go-mod-v12-{{ arch }}-<< parameters.package_name >>-{{ checksum "<< parameters.package_name >>/go.mod" }}
+            - go-mod-v11-{{ arch }}-<< parameters.package_name >>- # TODO: should we skip taking stale cache in case go.mod checksum is different
+      - restore_cache:
+          name: restore << parameters.package_name >> go build cache
+          keys:
+            # any build that was built on develop today
+            - go-build-v11-{{ arch }}-<< parameters.package_name >>-{{ checksum "/tmp/week-number" }}-{{ checksum "/tmp/daily-date" }}
+            # any build that was built on develop this week
+            - go-build-v11-{{ arch }}-<< parameters.package_name >>-{{ checksum "/tmp/week-number" }}
+      - when: &wait-for-graph
+          condition:
+            or:
+              - equal: [golang-with-janus, << parameters.executor_type >>]
+              - equal:
+                  [golang-with-janus-xlarge, << parameters.executor_type >>]
+          steps:
+            - run:
+                name: Waiting for JanusGraph to be ready
+                command: |
+                  for i in `seq 1 100`;
+                  do
+                    nc -z localhost 8182 && echo Success && sleep 20 && exit 0
+                    echo -n .
+                    sleep 1
+                  done
+                  echo Failed waiting for JanusGraph && exit 1
+      - when:
+          condition:
+            equal: [true, << parameters.use_private_repo >>]
+          steps:
+            - enable_private_repo_access
+      - run:
+          name: Go mod download
+          command: cd << parameters.package_name >> && go mod download
+      - when:
+          condition:
+            not: << parameters.wiz_ci_arm >>
+          steps:
+            - run:
+                name: 🧪🧪🧪 Run Tests
+                environment:
+                  TESTS_USE_EXTERNAL_REDIS: "1"
+                  TESTS_USE_EXTERNAL_DB: "1"
+                  TESTS_EXTERNAL_DB_PORT: "5432"
+                  TESTS_USE_EXTERNAL_GRAPHDB: "1"
+                  TESTS_EXTERNAL_GRAPHDB_PORT: "8182"
+                  TESTS_USE_EXTERNAL_DYNAMODB: "1"
+                  TESTS_EXTERNAL_DYNAMODB_PORT: "8000"
+                command: cd << parameters.package_name >> && task test
+      - save_cache:
+          name: save << parameters.package_name >> go mod cache
+          key: go-mod-v12-{{ arch }}-<< parameters.package_name >>-{{ checksum "<< parameters.package_name >>/go.mod" }}
+          paths:
+            - /go/pkg/mod
+      - when:
+          condition:
+            and:
+              - equal: [true, << parameters.build_docker_image >>]
+              - not: << parameters.wiz_ci_arm >>
+          steps:
+            - login_to_ecr
+            - run:
+                name: 🐳🐳🐳 Build Docker image
+                command: cd << parameters.package_name >> && task REPO="$AWS_ECR_ACCOUNT_URL/" TAG="${CIRCLE_SHA1}" build-docker
+            - scan_image_with_wizcli:
+                image: "$AWS_ECR_ACCOUNT_URL/beyond/<< parameters.package_name >>:${CIRCLE_SHA1}"
+      - when:
+          condition:
+            and:
+              - equal: [true, << parameters.build_docker_image >> ]
+              - equal: [true, << parameters.wiz_ci_arm >> ]
+              - matches:
+                  pattern: "^(develop|integration-.*)$"
+                  value: << pipeline.git.branch >>
+          steps:
+            - login_to_ecr
+            - run:
+                name: Install go
+                command: |
+                  GIT_ROOT=$(git rev-parse --show-toplevel)
+                  bash ${GIT_ROOT}/.circleci/scripts/install_golang.sh  
 
-  Run Validations:
-    <<: *container_config
-    resource_class: medium
-    <<: *environment
+            - run:
+                name: 🐳🐳🐳 Build ARM64 Docker image  🐳🐳🐳
+                command: cd << parameters.package_name >> && task REPO="$AWS_ECR_ACCOUNT_URL/" TAG="${CIRCLE_SHA1}" build-docker
+      - when:
+          condition:
+            and:
+            - equal: [<< pipeline.git.branch >>, develop]
+            - not: << parameters.wiz_ci_arm >>
+          steps:
+            # can be expensive step - do this only once a day only for develop build
+            - save_cache:
+                name: save << parameters.package_name >> go build cache
+                key: go-build-v11-{{ arch }}-<< parameters.package_name >>-{{ checksum "/tmp/week-number" }}-{{ checksum "/tmp/daily-date" }}
+                paths:
+                  - ~/.cache/go-build
+      - when:
+          condition:
+            and:
+              - matches:
+                  pattern: "^(develop|integration-.*)$"
+                  value: << pipeline.git.branch >>
+              - << parameters.push_to_ecr >>
+              - << parameters.build_docker_image >>
+          steps:
+            # Push package to wiz private ECR = beyond
+            - push_to_ecr:
+                package_name: << parameters.package_name >>
+                aws_ecr_account_url: $AWS_ECR_ACCOUNT_URL
+                aws_access_key: $AWS_ACCESS_KEY_ID
+                aws_access_key_secret: $AWS_SECRET_ACCESS_KEY
+                push_tag_only: << parameters.push_tag_only >>
+                tag: << parameters.tag >>
+            # Push package to wiz private gov ECR = wiz-gov
+            - when:
+                condition: << parameters.replicate_image >>
+                steps:
+                  - replicate_image:
+                      package_name: << parameters.package_name >>
+                      tag: << parameters.tag >>
+                      target_gov: true
+                      target_azure: << parameters.push_to_acr >>
+                      target_fedtest: true
+                      target_netscanner_gov: << parameters.push_to_netscanner_ecr >>
+                      target_auth_gov: << parameters.push_to_auth_ecr >>
+                      target_netscanner_fedtest: << parameters.push_to_netscanner_ecr >>
+                      target_netscanner_fedramp: << parameters.push_to_netscanner_ecr >>
+                      target_auth_fedtest: << parameters.push_to_auth_ecr >>
+                      target_auth_fedramp: << parameters.push_to_auth_ecr >>
+
+      - when:
+          condition:
+            and:
+              - matches:
+                  pattern: "^(develop|integration-.*)$"
+                  value: << pipeline.git.branch >>
+              - << parameters.push_to_acr >>
+              # If it was pushed to ecr - it will use image-replictor to push to ACR
+              - not: << parameters.push_to_ecr >>
+              - << parameters.build_docker_image >>
+          steps:
+            - run: &push-docker-to-acr
+                name: Push to ACR
+                environment:
+                  PACKAGE_NAME: << parameters.package_name >>
+                  REGISTRY_TYPE: acr
+                  BRANCH_NAME: << pipeline.git.branch >>
+                command: |
+                  export COMMIT_SHA=${CIRCLE_SHA1}
+                  docker login $ACR_NAME.azurecr.io --username $ACR_SP_ID --password $ACR_SP_PWD
+                  export REMOTE_DOCKER_REGISTRY=$ACR_NAME.azurecr.io
+                  bash .circleci/docker_push.sh
+
+  build-golang-justbuild:
+    parameters:
+      package_name:
+        type: string
+    working_directory: ~/project
+    executor: golang-only
     steps:
-      - *attach_workspace
-      - *restore_cache
-      - *add_ssh_keys
-      - *prepare_environment
-      - *secrets
-      - *create_id_set
-      - *merge_public_and_private_id_sets
-      - *validate_files_and_yaml
+      - aws-cli/configure:
+          aws-region: AWS_REGION
+      - enable_private_repo_access
+      - cached_checkout
       - run:
-          name: Spell Checks
-          command: |
-            python3 ./Tests/scripts/circleci_spell_checker.py $CIRCLE_BRANCH
+          name: Build
+          command: cd << parameters.package_name >> && task build
+
+  build-utils:
+    parameters:
+      package_name:
+        type: string
+    working_directory: ~/project
+    executor: golang-only
+    steps:
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - aws-cli/configure:
+          aws-region: AWS_REGION
+      - enable_private_repo_access
+      - cached_checkout
       - run:
-          name: Verify Base Branch for Contribution
-          when: always
+          name: Build Docker image
+          command: cd << parameters.package_name >> && task REPO="$AWS_ECR_ACCOUNT_URL/" TAG="${CIRCLE_SHA1}" build-docker
+      - scan_image_with_wizcli:
+          image: "$AWS_ECR_ACCOUNT_URL/beyond/<< parameters.package_name >>:${CIRCLE_SHA1}"
+      - when:
+          condition:
+            matches:
+              pattern: "^(develop|integration-.*)$"
+              value: << pipeline.git.branch >>
+          steps:
+            # Push package to wiz private ECR = beyond
+            - push_to_ecr:
+                package_name: << parameters.package_name >>
+                aws_ecr_account_url: $AWS_ECR_ACCOUNT_URL
+                aws_access_key: $AWS_ACCESS_KEY_ID
+                aws_access_key_secret: $AWS_SECRET_ACCESS_KEY
+            # Push package to wiz private gov ECR = wiz-gov
+            # Push package to wiz private fedtest ECR = wiz-fedtest
+            - replicate_image:
+                package_name: << parameters.package_name >>
+                tag: << pipeline.parameters.swissknife_sha >>
+                target_gov: true
+                target_azure: true
+                target_fedtest: true
+
+  test-libs:
+    parameters:
+    working_directory: ~/project
+    executor: golang-with-dynamo-xlarge
+    steps:
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - enable_private_repo_access
+      - cached_checkout
+      #      - run:
+      #          <<: *wait-for-postgres
+      - run:
+          name: Waiting for DynamoDB to be ready
           command: |
-            if [[ $CIRCLE_BRANCH =~ pull/[0-9]+ ]] ;
-              then
-                python3 ./Tests/scripts/verify_base_branch_for_contribution.py $CIRCLE_BRANCH
+            for i in `seq 1 100`;
+            do
+              nc -z localhost 8000 && echo Success && exit 0
+              echo -n .
+              sleep 1
+            done
+            echo Failed waiting for DynamoDB && exit 1
+      - run:
+          name: Create libs checksum
+          command: |
+            find *lib/*.mod | md5sum > libschecksum.txt
+      - restore_cache:
+          keys:
+            - go-mod-v5-{{ arch }}-libs-{{ checksum "libschecksum.txt" }}
+            - go-mod-v5-{{ arch }}-libs
+      - run:
+          name: Test libs
+          command: |
+            for d in */ ; do
+                if [[ "$d" =~ ^.*lib ]]; then
+                    if [[ "$d" =~ "diskanalyzerlib" ]]; then
+                      continue
+                    fi
+                    if [[ "$d" =~ "datascanlib" ]]; then
+                      continue
+                    fi
+                    echo "pushd $d && TESTS_USE_EXTERNAL_REDIS=1 TESTS_USE_EXTERNAL_DB=1 TESTS_EXTERNAL_DB_PORT=5432 TESTS_USE_EXTERNAL_GRAPHDB=1 TESTS_EXTERNAL_GRAPHDB_PORT=8182 TESTS_USE_EXTERNAL_DYNAMODB=1 TESTS_EXTERNAL_DYNAMODB_PORT=8000 task test && popd" >> commands.txt
+                fi
+            done
+            parallel -j 8 < commands.txt
+      - save_cache:
+          key: go-mod-v5-{{ arch }}-libs-{{ checksum "libschecksum.txt" }}
+          paths:
+            - /go/pkg/mod
+
+  web-lint:
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor: node
+    steps:
+      - cached_checkout
+      - run:
+          name: patch-package hash
+          command: md5sum web/patches/* > web/patches.hash
+      # Use the same node_modules cache as the regular web build
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-web-{{ checksum "web/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+            - node-v12-{{ arch }}-web-{{ checksum "web/yarn.lock" }}
+            - node-v12-{{ arch }}-web
+      - run:
+          name: Install dependencies
+          command: cd web && task install
+      - run:
+          name: Codegen
+          command: cd web && task codegen
+      - run:
+          name: Lint
+          no_output_timeout: 30m
+          command: cd web && task lint
+
+  api-gateway-lint:
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor: node
+    steps:
+      - cached_checkout
+      # Use the same node_modules cache as the regular web build
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-api-gateway-{{ checksum "api-gateway/yarn.lock" }}
+            - node-v12-{{ arch }}-api-gateway
+      - run:
+          name: Install dependencies
+          command: cd api-gateway && task install
+      - run:
+          name: Codegen
+          command: cd api-gateway && task codegen
+      - run:
+          name: Lint
+          no_output_timeout: 30m
+          command: cd api-gateway && task lint
+
+  gqlgen-lint:
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor: node
+    steps:
+      - cached_checkout
+      # Use the same node_modules cache as the regular web build
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-gqlgen-{{ checksum "gqlgen/yarn.lock" }}
+            - node-v12-{{ arch }}-gqlgen
+      - run:
+          name: Install dependencies
+          command: cd gqlgen && task install
+      - run:
+          name: Lint
+          no_output_timeout: 30m
+          command: cd gqlgen && task lint
+
+  gqlgen-backoffice-lint:
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor: node
+    steps:
+      - cached_checkout
+      # Use the same node_modules cache as the regular web build
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-gqlgen-backoffice-{{ checksum "gqlgen-backoffice/yarn.lock" }}
+            - node-v12-{{ arch }}-gqlgen-backoffice
+      - run:
+          name: Install dependencies
+          command: cd gqlgen-backoffice && task install
+      - run:
+          name: Lint
+          no_output_timeout: 30m
+          command: cd gqlgen-backoffice && task lint
+
+  web-integration-tests:
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor: cypress-web
+    parallelism: 16
+    steps:
+      - cached_checkout
+      - run:
+          name: patch-package hash
+          command: md5sum web/patches/* > web/patches.hash
+      - restore_cache:
+          keys:
+            - node-v13-{{ arch }}-web-cypress-node-modules-{{ checksum "web/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+            - node-v13-{{ arch }}-web-cypress-node-modules-{{ checksum "web/yarn.lock" }}
+            - node-v13-{{ arch }}-web-cypress-node-modules
+      - run:
+          name: install application server depnendencies
+          # We need to install again here because this is a different image running the application, so the cache is different.
+          # We can't utilize the same cache of the node modules we've had for other jobs
+          # However, we can cache this install specifically just like we do on other jobs.
+          # The first run of a changed lock file will take a few minutes, but the rest will be fast.
+          command: |
+            cd web
+            task install
+      - save_cache:
+          key: node-v13-{{ arch }}-web-cypress-node-modules-{{ checksum "web/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+          paths:
+            - "web/node_modules"
+            - "~/.cache/Cypress"
+      - run:
+          name: Integration tests
+          command: |
+            cd web
+            task codegen
+            task build -- --sourcemap
+            task ci:test:integration
+
+  build-node-docker:
+    parameters:
+      package_name:
+        type: string
+      resource_class:
+        type: string
+        default: large
+      fips:
+        type: boolean
+        default: false
+    # This is a RAMDisk directory - It does all IO operations on the RAM making everything run faster!
+    # Read more about it here: https://support.circleci.com/hc/en-us/articles/360054908812-Speed-up-steps-using-a-RAM-disk
+    working_directory: /mnt/ramdisk/project
+    executor:
+      name: node
+      resource_class: << parameters.resource_class >>
+    steps:
+      - when:
+          condition:
+            equal: [report-generator, << parameters.package_name >>]
+          steps:
+            # This is only needed for report-generator and it can be around 30s which is a considerable amount of time
+            - install_git_lfs
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - aws-cli/configure:
+          aws-region: AWS_REGION
+      - cached_checkout
+      - run:
+          name: patch-package hash
+          command: md5sum web/patches/* > web/patches.hash
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-<< parameters.package_name >>-{{ checksum "<< parameters.package_name >>/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+            - node-v12-{{ arch }}-<< parameters.package_name >>-{{ checksum "<< parameters.package_name >>/yarn.lock" }}
+            - node-v12-{{ arch }}-<< parameters.package_name >>
+      - run:
+          name: Install dependencies
+          command: |
+            cd << parameters.package_name >>
+            task install
+      - save_cache:
+          key: node-v12-{{ arch }}-<< parameters.package_name >>-{{ checksum "<< parameters.package_name >>/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+          paths:
+            - "<< parameters.package_name >>/node_modules"
+      - run:
+          name: Codegen
+          command: |
+            cd << parameters.package_name >>
+            task codegen
+      - run:
+          name: Build
+          command: |
+            cd << parameters.package_name >>
+            task build
+      - when:
+          condition:
+            equal: [false, << parameters.fips >>]
+          steps:
+            - run:
+                name: Build Docker image
+                command: |
+                  cd << parameters.package_name >>
+                  task REPO="$AWS_ECR_ACCOUNT_URL/" TAG="${CIRCLE_SHA1}" build-docker
+            - scan_image_with_wizcli:
+                image: "$AWS_ECR_ACCOUNT_URL/beyond/<< parameters.package_name >>:${CIRCLE_SHA1}"
+            - when:
+                condition:
+                  matches:
+                    pattern: "^(develop|integration-.*)$"
+                    value: << pipeline.git.branch >>
+                steps:
+                  # Push package to wiz private ECR = beyond
+                  - push_to_ecr:
+                      package_name: << parameters.package_name >>
+                      aws_ecr_account_url: $AWS_ECR_ACCOUNT_URL
+                      aws_access_key: $AWS_ACCESS_KEY_ID
+                      aws_access_key_secret: $AWS_SECRET_ACCESS_KEY
+                  # Push package to wiz private gov ECR = wiz-gov
+                  - replicate_image:
+                      package_name: << parameters.package_name >>
+                      tag: << pipeline.parameters.swissknife_sha >>
+                      target_gov: true
+                      target_azure: false
+                      target_fedtest: true
+      - when:
+          condition:
+            equal: [true, << parameters.fips >>]
+          steps:
+            - run:
+                name: Build FIPS docker image
+                command: |
+                  cd << parameters.package_name >>
+                  task REPO="$AWS_ECR_ACCOUNT_URL/" TAG="${CIRCLE_SHA1}" build-fips-docker
+            - scan_image_with_wizcli:
+                image: "$AWS_ECR_ACCOUNT_URL/beyond/<< parameters.package_name >>-fips:${CIRCLE_SHA1}"
+            - when:
+                condition:
+                  matches:
+                    pattern: "^(develop|integration-.*)$"
+                    value: << pipeline.git.branch >>
+                steps:
+                  # Push package to wiz private ECR = beyond
+                  - push_to_ecr:
+                      package_name: << parameters.package_name >>-fips
+                      aws_ecr_account_url: $AWS_ECR_ACCOUNT_URL
+                      aws_access_key: $AWS_ACCESS_KEY_ID
+                      aws_access_key_secret: $AWS_SECRET_ACCESS_KEY
+                  # Push package to wiz private gov ECR = wiz-gov
+                  - replicate_image:
+                      package_name: << parameters.package_name >>-fips
+                      tag: << pipeline.parameters.swissknife_sha >>
+                      target_gov: true
+                      target_azure: false
+                      target_fedtest: true
+
+      - when:
+          condition:
+            and:
+              - equal: [web, << parameters.package_name >>]
+              - matches:
+                  pattern: "^(develop|integration-.*)$"
+                  value: << pipeline.git.branch >>
+          steps:
+            - run:
+                name: push web-cdn-global
+                command: aws s3 sync ${CIRCLE_WORKING_DIRECTORY}/web/build s3://web-cdn-global/${CIRCLE_SHA1} --exclude '*.js.map' --exclude '*.css.map'
+            #  Seems like LogRocket has issues right now (https://app.circleci.com/pipelines/github/wiz-sec/wiz/144561/workflows/c3640f09-7e36-494b-871e-7348264519d0/jobs/1350144). Disabling this non-crucial step in CI until this is solved.
+            # - run:
+            #     name: push source map to logrocket
+            #     command: cd << parameters.package_name >> && export GIT_VERSION="${CIRCLE_SHA1}" && task ci:upload-sourcemaps
+
+      - when:
+          # Only for web builds on feature branches ("wz-1234-jira-ticket-name") and not "develop" and others
+          condition:
+            and:
+              # When running this job with the web package because of changes other than web (e.g. gqlgen), we don't need to be deployed to netlify.
+              - equal: [true, << pipeline.parameters.web-only >>]
+              - equal: [web, << parameters.package_name >>]
+              - matches:
+                  pattern: "^([^/]+/)?(wz|WZ)-\\d+.*$"
+                  value: << pipeline.git.branch >>
+          steps:
+            - run:
+                name: Deploy Preview to Netlify
+                command: |
+                  cd web
+                  task ci:deploy-preview
+
+  update-gql-schema:
+    working_directory: ~/project
+    executor: golang-only-large
+    parameters:
+      variant:
+        type: string
+        default: test-eu3
+    steps:
+      - cached_checkout
+      - update_gql_schema:
+          variant: << parameters.variant >>
+
+  update-backoffice-gql-schema:
+    working_directory: ~/project
+    executor: golang-only-large
+    steps:
+      - cached_checkout
+      - update_backoffice_gql_schema
+
+  validate-gql-schema:
+    working_directory: ~/project
+    executor: golang-only-large
+    parameters:
+      variant:
+        type: string
+        default: test-eu3
+    steps:
+      - cached_checkout
+      - run: &override_gql_variant_by_pr
+          name: "Set graph variant"
+          command: |
+            if [ -n $CIRCLE_PULL_REQUEST ]; then
+              pr=$(echo https://api.github.com/repos/${CIRCLE_PULL_REQUEST:19} | sed "s/\/pull\//\/pulls\//")
+
+              base=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" $pr | jq -r '.base.ref')
+              echo "PR base branch is ${base}"
+
+              if [[ "$base" =~ integration-.* ]]; then
+                VARIANT="$base"
+                echo "Variant chosen as ${VARIANT}"
+                echo "$VARIANT" > "/tmp/VARIANT"
+              fi
+            fi
+      - validate_gql_schema:
+          variant: <<parameters.variant>>
+
+  validate-gql-schema-prod: &validate-gql-schema-prod
+    working_directory: ~/project
+    executor: golang-only-large
+    parameters:
+      rover-key-type:
+        type: string
+    steps:
+      - cached_checkout
+      - enable_private_repo_access
+      - validate_gql_schema_prod:
+          rover-key-type: <<parameters.rover-key-type>>
+
+  validate-gql-schema-backoffice-prod:
+    *validate-gql-schema-prod
+
+
+  validate-backoffice-gql-schema:
+    working_directory: ~/project
+    executor: golang-only-large
+    parameters:
+      variant:
+        type: string
+        default: test-eu3
+      global_variant:
+        type: string
+        default: global-test-eu1
+    steps:
+      - cached_checkout
+      - run: *override_gql_variant_by_pr
+      - validate_backoffice_gql_schema:
+          variant: <<parameters.variant>>
+          app-type: dc
+      - validate_backoffice_gql_schema:
+          variant: << parameters.global_variant >>
+          app-type: global
+
+  sync-components-to-ops:
+    executor: deployer
+    steps:
+      - sync_components_to_ops
+
+  save-versions-to-ops:
+    parameters:
+      package_name:
+        type: string
+        default: "[^:]+"
+      packages_filename:
+        type: string
+        default: ""
+      versions_file:
+        type: string
+        default: "deployment/versions/"
+    executor: deployer
+    steps:
+      - save_version_to_ops:
+          package_name: << parameters.package_name >>
+          packages_filename: << parameters.packages_filename >>
+          versions_files_path: << parameters.versions_file >>
+
+  trigger-unit-tests-and-validations:
+    parameters:
+      sync_components_to_ops:
+        type: boolean
+        default: false
+      save_versions_file:
+        type: boolean
+        default: false
+      base_branch:
+        type: string
+        default: "develop"
+      slack_channels:
+        type: string
+        default: ci-notifications
+      notify_on:
+        type: string
+        default: fail
+    executor:
+      name: golang-python
+    working_directory: ~/project
+    steps:
+      - cached_checkout
+      - run:
+          name: Get Additional Param map
+          command: |
+            echo "export PARAM_MAP='{\"run_trigger_workflow\": false }'" >> $BASH_ENV
+            source $BASH_ENV
+      - when:
+          condition: &wip_branch
+            matches:
+              value: "<< pipeline.git.branch >>"
+              pattern: "WIP/.*"
+          steps:
+            - swissknife/trigger-workflows-for-all-modified: &swissknife
+                base-branch: "<< pipeline.git.branch >>"
+                run-mode-for-base-branch: run_for_last_commit
+                use-divergence-point: true
+                code-param-name-map: *triggers
+                additional-param-map: "$PARAM_MAP"
+                use-swissknife-sha: true
+                wait-for-workflows: true
+                sleep-time-between-checks: "5"
+                modified-params-filename: /tmp/swissknife/triggered.txt
+      - when:
+          condition:
+            not: *wip_branch
+          steps:
+            - swissknife/trigger-workflows-for-all-modified:
+                <<: *swissknife
+                base-branch: << parameters.base_branch >>
+      - when:
+          condition:
+            equal: [true, << parameters.sync_components_to_ops >>]
+          steps:
+            - sync_components_to_ops
+      - when:
+          condition:
+            equal: [true, << parameters.save_versions_file >>]
+          steps:
+            - save_version_to_ops:
+                versions_files_path: deployment/versions/
+                packages_filename: /tmp/swissknife/triggered.txt
+      - wiz-slack/notify:
+          slack_channels: << parameters.slack_channels >>
+          notify_on: << parameters.notify_on >>
+
+  build-cli:
+    working_directory: ~/project
+    executor: golang-only-xlarge
+    steps:
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Run Tests
+          command: cd cli && task test
+      - run:
+          name: Build CLI binary (Linux)
+          command: |
+            cd cli
+            rm -f ./wizcli
+            task staticbuild-linux
+            if [[ ! -f "./wizcli" ]]; then
+              echo "CLI binary for Linux was not created"
+              exit 1
             fi
       - run:
-          name: Validate landingPageSections.json
-          when: always
+          name: Build CLI binary (Windows)
           command: |
-            # Download index.zip
-            INDEX_PATH=$(mktemp)
-            gsutil cp gs://marketplace-dist/content/packs/index.zip $INDEX_PATH
-            echo "successfully downloaded index.zip into $INDEX_PATH"
+            cd cli
+            rm -f ./wizcli.exe
+            task staticbuild-windows
+            if [[ ! -f "./wizcli.exe" ]]; then
+              echo "CLI binary for Windows was not created"
+              exit 1
+            fi
+      - run:
+          name: Build CLI binary (Mac)
+          command: |
+            cd cli
+            rm -f ./wizcli-mac
+            task staticbuild-mac
+            if [[ ! -f "./wizcli-mac" ]]; then
+              echo "CLI binary for Mac was not created"
+              exit 1
+            fi
+      - run:
+          name: Build CLI standalone image
+          command: |
+            cd cli
+            task \
+              REPO="$ACR_NAME.azurecr.io/" \
+              TAG="${CIRCLE_SHA1}" \
+              build-docker
+      - when:
+          condition:
+            equal: [develop, << pipeline.git.branch >>]
+          steps:
+            - run:
+                name: Push to intermediate ACR
+                command: |
+                  docker login "$ACR_NAME.azurecr.io" --username "$ACR_SP_ID" --password "$ACR_SP_PWD"
 
-            UNZIP_PATH=$(mktemp -d)
-            unzip $INDEX_PATH -d $UNZIP_PATH
+                  unrevisioned_tag="$ACR_NAME.azurecr.io/wizcli:$(cat ./cli/VERSION)"
+                  original_tag=${unrevisioned_tag}-${CIRCLE_SHA1}
+                  docker push $original_tag
 
-            python3 Tests/Marketplace/validate_landing_page_sections.py -i $UNZIP_PATH
-      - *store_artifacts
+                  shorten_tag="${unrevisioned_tag}-${CIRCLE_SHA1:0:7}"
+                  docker tag $original_tag ${shorten_tag}
+                  docker push $shorten_tag
 
+      - persist_to_workspace:
+          root: "."
+          paths:
+            - cli
 
+  build-wiz-terraform-provider:
+    working_directory: ~/project
+    parameters:
+      build_dir:
+        type: string
+        default: /tmp/build
+      workspace_dir:
+        type: string
+        default: /tmp/deploy
+    executor: golang-only-large
+    steps:
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - enable_private_repo_access
+      - cached_checkout
+      - run:
+          name: Run Tests
+          command: |
+            cd wiz-terraform-provider
+            task test
+      - validate_deployed_binary_version:
+          binary_package_name: wiz-terraform-provider
+          version_file_name: BASE_VERSION
+          skip_patch_version: true
+      - run:
+          name: Build wiz terraform provider
+          command: |
+            cd wiz-terraform-provider
+            export VERSION=`cat BASE_VERSION`.<< pipeline.number >>
+            export BUILD_DIR=<< parameters.build_dir >>
+            export DEPLOY_DIR=<< parameters.workspace_dir >>
+            task build-all
+            task create-deploy-dir
+            echo $VERSION ><< parameters.workspace_dir >>/PROVIDER_VERSION
+      - persist_to_workspace:
+          root: << parameters.workspace_dir >>
+          paths:
+            - .
+
+  sign-checksums:
+    working_directory: ~/project
+    parameters:
+      workspace_dir:
+        type: string
+        default: /tmp/deploy
+    executor: base
+    steps:
+      - attach_workspace:
+          at: << parameters.workspace_dir >>
+      - when:
+          condition:
+            matches:
+              pattern: "^(develop|integration-.*)$"
+              value: << pipeline.git.branch >>
+          steps:
+            - cached_checkout
+            - run:
+                name: Install task
+                command: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d
+            - run:
+                name: Import GPG key
+                command: echo -e "$GPG_PRIVATE_KEY" | gpg --no-tty --batch --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import
+            - run:
+                name: Sign checksum
+                command: |
+                  cd wiz-terraform-provider
+                  export VERSION=`cat << parameters.workspace_dir >>/PROVIDER_VERSION`
+                  export DEPLOY_DIR=<< parameters.workspace_dir >>
+                  export GPG_PASSPHRASE="$GPG_PASSPHRASE"
+                  ../bin/task sign-checksums
+            - persist_to_workspace:
+                root: << parameters.workspace_dir >>
+                paths:
+                  - .
+
+  upload-terraform-provider-to-global-s3:
+    working_directory: ~/project
+    parameters:
+      bucket_name:
+        type: string
+      workspace_dir:
+        type: string
+        default: /tmp/deploy
+    executor: golang-only
+    steps:
+      - attach_workspace:
+          at: << parameters.workspace_dir >>
+      - when:
+          condition:
+            matches:
+              pattern: "^(develop|integration-.*)$"
+              value: << pipeline.git.branch >>
+          steps:
+            - aws-cli/configure:
+                aws-region: AWS_REGION
+            - run:
+                name: Sync terraform deployment dir to S3
+                command: |
+                  provider_version_path="<< parameters.workspace_dir >>/PROVIDER_VERSION"
+                  version=`cat "$provider_version_path"`
+                  rm "$provider_version_path"
+                  s3_deployment_dir=s3://<< parameters.bucket_name >>/${CIRCLE_SHA1}-${version}
+                  aws s3 sync "<< parameters.workspace_dir >>" "${s3_deployment_dir}"
+
+  threats-center-data:
+    working_directory: /mnt/ramdisk/project
+    parameters:
+      threats_data_file_path:
+        type: string
+        default: "/tmp/threats/data.json"
+      threats_version_file_path:
+        type: string
+        default: "/tmp/threats/version.txt"
+    executor: node
+    steps:
+      - cached_checkout
+      - run:
+          name: patch-package hash
+          command: md5sum web/patches/* > web/patches.hash
+      # Use the same node_modules cache as the regular web build
+      - restore_cache:
+          keys:
+            - node-v12-{{ arch }}-web-{{ checksum "web/yarn.lock" }}-{{ checksum "web/patches.hash" }}
+            - node-v12-{{ arch }}-web-{{ checksum "web/yarn.lock" }}
+            - node-v12-{{ arch }}-web
+      - run:
+          name: Install dependencies
+          command: cd web && task install
+      - run:
+          name: Generate data & version
+          environment:
+            JSON_DATA_OUTPUT_PATH: << parameters.threats_data_file_path >>
+            VERSION_OUTPUT_PATH: << parameters.threats_version_file_path >>
+          command: |
+            cd web
+            task cms:datagen:threats -- --outputDataFile=${JSON_DATA_OUTPUT_PATH} --outputVersionFile=${VERSION_OUTPUT_PATH}
+      - when:
+          condition:
+            equal: [develop, << pipeline.git.branch >>]
+          steps:
+            - aws-cli/configure:
+                aws-region: AWS_REGION
+            - run:
+                name: push threats to web-cdn-global
+                environment:
+                  SOURCE_FILE: << parameters.threats_data_file_path >>
+                command: |
+                  test -f $SOURCE_FILE || echo "path $SOURCE_FILE does not exist"
+                  aws s3 cp $SOURCE_FILE s3://web-cdn-global/threats-data/${CIRCLE_SHA1}/threats.json
+            - install_single_ssh_key:
+                host: gitops
+                fingerprint: "59:d0:d0:77:23:2d:b7:d9:31:50:96:cc:ff:ef:0e:c8"
+            - run:
+                name: push new version to ops
+                environment:
+                  VERSION_OUTPUT_PATH: << parameters.threats_version_file_path >>
+                command: |
+                  cd .circleci
+                  export CURRENT_WIZ_COMMIT=${CIRCLE_SHA1}
+                  export CURRENT_BRANCH=develop
+                  export OPS_REPO="git@gitops:wiz-sec/ops.git"
+                  bash sync_threats_data.sh
+
+  upload-wizcli-global-s3:
+    working_directory: ~/project
+    parameters:
+      file_name:
+        type: string
+      bucket_name:
+        type: string
+    executor: golang-only
+    steps:
+      - attach_workspace:
+          at: "."
+      - when:
+          condition:
+            matches:
+              pattern: "^(develop|integration-.*)$"
+              value: << pipeline.git.branch >>
+          steps:
+            - aws-cli/configure:
+                aws-region: AWS_REGION
+            - run:
+                name: Upload << parameters.file_name >> binary to global bucket
+                command: |
+                  cd ~/project/cli
+                  VERSION="$(cat VERSION)-<< pipeline.parameters.swissknife_sha >>"
+                  if [[ -z "${VERSION}" ]]; then
+                    echo "version is empty ${VERSION}"
+                    exit 1
+                  fi
+                  FILENAME="<<parameters.file_name>>"
+                  FILENAME_WITH_VERSION="$FILENAME-${VERSION}"
+                  CLI_SHA256="$(sha256sum "$FILENAME" | cut -d' ' -f1 | tr -d '\n')"
+                  CLI_SHA256_FILENAME="${FILENAME_WITH_VERSION}-sha256"
+                  echo "CLI filename is: ${FILENAME_WITH_VERSION}"
+                  echo "CLI SHA256 is: ${CLI_SHA256}"
+                  echo "$CLI_SHA256" > "${CLI_SHA256_FILENAME}"
+                  echo "Uploading $FILENAME file to global s3 bucket"
+                  aws s3 cp \
+                    --storage-class STANDARD_IA \
+                    --metadata "sha256=$CLI_SHA256" \
+                    "$FILENAME" "s3://<< parameters.bucket_name >>/${FILENAME_WITH_VERSION}"
+                  aws s3 cp \
+                    --storage-class STANDARD_IA \
+                    "${CLI_SHA256_FILENAME}" "s3://<< parameters.bucket_name >>/${CLI_SHA256_FILENAME}"
+
+  validate-iac-rego-lib:
+    executor: golang-only-xlarge
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v3-validate-iac-rego-lib-{{ checksum "iaclib/go.mod" }}
+            - go-mod-v3-validate-iac-rego-lib
+      - run:
+          name: Validate IAC Rgo Libs is up to date
+          command: |
+            cd iac-dal && task export
+            cd ../kicslib
+
+            if [[ $(git diff --name-only | grep -v "go.sum" | grep -v "go.mod") != '' ]]; then
+              echo 'iac kicshelper is NOT up to date, failing. Diff is:'
+              echo "$(git diff --name-only | grep -v 'go.sum' | grep -v 'go.mod')"
+              exit 1
+            fi
+
+            exit 0
+      - save_cache:
+          key: go-mod-v3-validate-iac-rego-lib-{{ checksum "iaclib/go.mod" }}
+          paths:
+            - ~/project/iaclib/kicshelper/libraries
+
+  upload-iac-rego-lib:
+    working_directory: ~/project
+    executor:
+      name: golang-only-xlarge
+      ecr_url: << parameters.ecr_url >>
+    parameters:
+      ecr_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com/beyond
+    steps:
+      - enable_private_repo_access
+      - cached_checkout
+      - restore_cache:
+          keys:
+            - go-mod-v3-validate-iac-rego-lib-{{ checksum "iaclib/go.mod" }}
+            - go-mod-v3-validate-iac-rego-lib
+      - aws-cli/configure
+      - run:
+          name: Upload iac-rego-lib
+          command: |
+            cd iac-dal
+            export ARCHIVE_VERSION="${CIRCLE_SHA1}"
+            task upload
+            export ARCHIVE_VERSION="${CIRCLE_SHA1:0:7}"
+            task upload
+
+  trigger-build-all:
+    working_directory: ~/project
+    executor: deployer
+    steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "94:dd:d1:69:e4:16:11:2c:f4:66:2c:f4:16:43:ae:55"
+      - run:
+          name: Install SSH key wiz-writer
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_94ddd169e416112cf4662cf41643ae55
+              IdentitiesOnly yes' > ~/.ssh/config
+      - run:
+          name: Push trigger
+          command: |
+            mkdir ~/project/temp_wiz
+            cd ~/project/temp_wiz
+            git clone -b develop git@gitwiz:wiz-sec/wiz.git
+            cd wiz
+            ./wizbuild-all.sh
+            git add .
+            git config user.email "circleci@wiz.io"
+            git config user.name "CircleCI"
+            git commit -m "CirlceCi Trigger Monthly Build All"
+            git push
+
+  validate_circle_libs:
+    description: Validates all go libs are defined in circleci config.yml anchors
+    executor: golang-python
+    steps:
+      - restore_cache:
+          keys:
+            - pip-v1-pyaml-21.10.1
+      - run:
+          name: pip install pyaml
+          command: |
+            mkdir -p $PIP_CACHE_DIR
+            pip3 install pyaml==21.10.1
+          environment:
+            PIP_CACHE_DIR: /tmp/pip_cache
+      - save_cache:
+          key: pip-v1-pyaml-21.10.1
+          paths:
+            - /tmp/pip_cache
+      - cached_checkout
+      - run:
+          name: validate circle-config
+          command: cd .circleci/scripts && python3 circle_verify_libs.py
+
+  update-chromium-version:
+    working_directory: ~/project
+    executor: deployer
+    steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "94:dd:d1:69:e4:16:11:2c:f4:66:2c:f4:16:43:ae:55"
+      - run:
+          name: Install SSH key wiz-writer
+          command: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            echo 'Host gitwiz
+              Hostname github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa_94ddd169e416112cf4662cf41643ae55
+              IdentitiesOnly yes' > ~/.ssh/config
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - run:
+          name: Update chromium version
+          command: |
+            git clone -b develop git@gitwiz:wiz-sec/wiz.git .
+            git config --global user.email "circleci@wiz.io"
+            git config --global user.name "CircleCI"
+
+            CHROMIUM_VERSION_FILE=netscanner-screenshot/chromium-version.trigger
+
+            echo "Current version: $(cat $CHROMIUM_VERSION_FILE)"
+
+            CHROMIUM_VERSION=`docker run archlinux:latest /bin/sh -c "pacman -Ssy chromium"  | grep extra/chromium | head -n 1 | awk '{print $2}'`
+            echo $CHROMIUM_VERSION > $CHROMIUM_VERSION_FILE
+            git add $CHROMIUM_VERSION_FILE
+
+            echo "Latest version: $(cat $CHROMIUM_VERSION_FILE)"
+
+            # Commit changes only if there are any
+            git diff --quiet && git diff --staged --quiet || (git commit -a -m "Update chromium version ${CHROMIUM_VERSION}" && git push)
+
+  create-and-push-docker-manifest:
+    description: creates multi arch a docker manifest by image tags with diff architectures
+    executor: replicator
+    parameters:
+      executor_type:
+        type: string
+        default: base
+      package_name:
+        type: string
+      registry_prefix:
+        type: string
+        default: beyond
+      registry_url:
+        type: string
+        default: 197171649850.dkr.ecr.us-east-2.amazonaws.com
+      arm64_tag:
+        type: string
+        default: << pipeline.parameters.swissknife_sha >>-arm64
+      amd64_tag:
+        type: string
+        default: << pipeline.parameters.swissknife_sha >>
+      commit_tag:
+        type: string
+        default: << pipeline.parameters.swissknife_sha >>
+    steps:
+      - checkout:
+          path: ~/project/
+      - login_to_ecr
+      - when:
+          condition:
+            and:
+              - matches:
+                  pattern: "^(develop|integration-.*)$"
+                  value: << pipeline.git.branch >>
+          steps:
+            - run:
+                name: create multi-arch docker manifest
+                command: |
+                  export REGISTRY_URL=<< parameters.registry_url >>/<< parameters.registry_prefix >>
+                  export PACKAGE_NAME=<< parameters.package_name >>
+                  export AMD64_TAG=<< parameters.amd64_tag >>
+                  export ARM64_TAG=<< parameters.arm64_tag >>
+                  export COMMIT_SHA=<< parameters.commit_tag >>
+                  export BRANCH_NAME=<< pipeline.git.branch >>
+                  GIT_ROOT=$(git rev-parse --show-toplevel)
+                  bash ${GIT_ROOT}/.circleci/scripts/docker_multiarch_manifest.sh
 
 workflows:
   version: 2
-  commit:
-    when:
-      not:
-        or:
-          - << pipeline.parameters.nightly >>
-    jobs:
-      - Setup Environment
-      - Run Unit Testing And Lint:
-          requires:
-            - Setup Environment
-      - Run Validations:
-          requires:
-            - Setup Environment
 
-  nightly:
-    triggers:
-      - schedule:
-          # should trigger every day at 12 AM UTC (3 AM Israel Time)
-          cron: "0 0 * * *"
+  unit-tests-and-validations:
+    when: << pipeline.parameters.run_trigger_workflow >>
+    jobs:
+      - trigger-unit-tests-and-validations:
+          sync_components_to_ops: true
+          save_versions_file: true
+          base_branch: << pipeline.git.branch >>
+          context:
+            - BuildContext
+            - SlackDynamoCtx
+          slack_channels: author
+          notify_on: fail
+          filters:
+            branches:
+              only: *int_branches
+      - trigger-unit-tests-and-validations:
+          sync_components_to_ops: true
+          save_versions_file: true
+          base_branch: develop
+          context:
+            - BuildContext
+            - SlackDynamoCtx
+          slack_channels: ci-notifications,author
+          notify_on: fail
           filters:
             branches:
               only:
-                - master
-    jobs:
-      *nightly_jobs
+                - develop
+      - trigger-unit-tests-and-validations:
+          save_versions_file: false
+          base_branch: develop
+          context:
+            - BuildContext
+            - SlackDynamoCtx
+          slack_channels: author
+          notify_on: never # avoid alerts fatigue
+          filters:
+            branches:
+              ignore: *deployable_branches
 
-  nightly_trigger:
-    # will initiate when using the trigger script.
-    when: << pipeline.parameters.nightly >>
+  validate:
+    when: << pipeline.parameters.validate >>
     jobs:
-      *nightly_jobs
+      - validate-gqlgen:
+          context: BuildContext
+      - validate-gqlgen-backoffice:
+          context: BuildContext
+      - validate-nativetypes:
+          context: BuildContext
+      - validate-component-registration:
+          context: BuildContext
 
+  validate-gosec:
+    when: << pipeline.parameters.validate-gosec >>
+    jobs:
+      - validate-gosec:
+          context: BuildContext
+
+  validate-proto:
+    when: << pipeline.parameters.proto>>
+    jobs:
+      - validate-proto:
+          context: BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+
+  validate-gql-schema:
+    when: << pipeline.parameters.gqlgen>>
+    jobs:
+      - validate-gql-schema:
+          context:
+            - ApolloManagerContext
+            - BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+      - gqlgen-lint:
+          context: BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+      - validate-gql-schema-prod:
+          rover-key-type: wiz-graph
+          context:
+            - ApolloManagerContext
+            - BuildContext
+            - SlackDynamoCtx
+          filters:
+            branches:
+              ignore: *deployable_branches
+          requires:
+            - validate-gql-schema
+      - update-gql-schema:
+          context:
+            - ApolloManagerContext
+            - BuildContext
+          variant: test-eu3
+          filters:
+            branches:
+              only:
+                - develop
+      - update-gql-schema:
+          context:
+            - ApolloManagerContext
+            - BuildContext
+          variant: << pipeline.git.branch >>
+          filters:
+            branches:
+              only: *int_branches
+
+  validate-backoffice-gql-schema:
+    when: << pipeline.parameters.gqlgen-backoffice>>
+    jobs:
+      - validate-backoffice-gql-schema:
+          context:
+            - BackofficeApolloManagerContext
+            - BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+      - validate-gql-schema-backoffice-prod:
+          rover-key-type: backoffice-graph
+          context:
+            - BackofficeApolloManagerContext
+            - BuildContext
+            - SlackDynamoCtx
+          requires:
+            - validate-backoffice-gql-schema
+          filters:
+            branches:
+              ignore: *deployable_branches
+      - gqlgen-backoffice-lint:
+          context: BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+      - update-backoffice-gql-schema:
+          context:
+            - BackofficeApolloManagerContext
+            - BuildContext
+          filters:
+            branches:
+              only: *deployable_branches
+
+  upload-iac-rego-lib:
+    when: << pipeline.parameters.iac-rego-lib>>
+    jobs:
+      - upload-iac-rego-lib:
+          context:
+            - GlobalStaticDataContext
+          filters:
+            branches:
+              only: *deployable_branches
+      - upload-iac-rego-lib:
+          name: upload-iac-rego-lib-to-gov
+          ecr_url: 399027795803.dkr.ecr.us-gov-west-1.amazonaws.com/wiz-gov
+          context:
+            - GlobalStaticDataGovContext
+          filters:
+            branches:
+              only: *deployable_branches
+
+  validate-iac-rego-lib:
+    when: << pipeline.parameters.iac-rego-lib>>
+    jobs:
+      - validate-iac-rego-lib:
+          context:
+            - ApolloManagerContext
+            - BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+
+  validate-sql-migrations:
+    when: << pipeline.parameters.validate-sql-migrations >>
+    jobs:
+      - validate-sql-migrations:
+          context: BuildContext
+          filters:
+            branches:
+              ignore: *deployable_branches
+
+  # Test all libs
+  buildlibs:
+    when: << pipeline.parameters.buildlibs >>
+    jobs:
+      - validate_circle_libs:
+          context: BuildContext
+      - build-golang: &testlib
+          name: << matrix.package_name >>
+          context: BuildContext
+          executor_type: golang-with-dynamo
+          build_docker_image: false
+          matrix:
+            parameters:
+              package_name: *golibs
+      - build-golang:
+          <<: *testlib
+          executor_type: golang-with-dynamo-xlarge
+          matrix:
+            parameters:
+              package_name: *goxllibs
+
+  # Workflows defined for each package.
+  web:
+    when: << pipeline.parameters.web >>
+    jobs:
+      - build-node-docker:
+          name: web-build-docker
+          package_name: web
+          context: BuildContext
+          resource_class: large
+      - build-node-docker:
+          name: web-build-fips-docker
+          package_name: web
+          fips: true
+          context: BuildContext
+          resource_class: large
+      - web-lint:
+          context: BuildContext
+      - web-integration-tests:
+          context: BuildContext
+          name: web-integration-tests
+
+  api-gateway:
+    when: << pipeline.parameters.api-gateway >>
+    jobs:
+      - build-node-docker:
+          name: api-gateway-build-docker
+          package_name: api-gateway
+          context: BuildContext
+      - api-gateway-lint:
+          context: BuildContext
+
+  report-generator:
+    when: << pipeline.parameters.report-generator >>
+    jobs:
+      - build-node-docker:
+          name: report-generator-build-docker
+          package_name: report-generator
+          context: BuildContext
+
+  connector-dal:
+    when: << pipeline.parameters.connector-dal >>
+    jobs:
+      - build-golang:
+          name: connector-dal
+          package_name: connector-dal
+          context: BuildContext
+
+  service-registry:
+    when: << pipeline.parameters.service-registry >>
+    jobs:
+      - build-golang:
+          name: service-registry
+          package_name: service-registry
+          context: BuildContext
+
+  control-engine:
+    when: << pipeline.parameters.control-engine >>
+    jobs:
+      - build-golang:
+          name: control-engine
+          package_name: control-engine
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+
+  control-engine-operator:
+    when: << pipeline.parameters.control-engine-operator >>
+    jobs:
+      - build-golang:
+          name: control-engine-operator
+          package_name: control-engine-operator
+          context: BuildContext
+          executor_type: golang-large
+      - validate-operator-generated:
+          context: BuildContext
+          package_name: control-engine-operator
+
+  cloudplatform-dal:
+    when: << pipeline.parameters.cloudplatform-dal >>
+    jobs:
+      - build-golang:
+          name: cloudplatform-dal
+          package_name: cloudplatform-dal
+          context: BuildContext
+
+  changeset-ingestor:
+    when: << pipeline.parameters.changeset-ingestor >>
+    jobs:
+      - build-golang:
+          name: changeset-ingestor
+          package_name: changeset-ingestor
+          context: BuildContext
+
+  changeset-dal:
+    when: << pipeline.parameters.changeset-dal >>
+    jobs:
+      - build-golang:
+          name: changeset-dal
+          package_name: changeset-dal
+          context: BuildContext
+
+  cloudplatform-fetcher:
+    when: << pipeline.parameters.cloudplatform-fetcher >>
+    jobs:
+      - build-golang:
+          name: cloudplatform-fetcher
+          package_name: cloudplatform-fetcher
+          context: BuildContext
+          executor_type: golang-xlarge
+      - build-golang:
+          name: cloudplatform-fetcher-arm64
+          package_name: cloudplatform-fetcher
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: cloudplatform-fetcher
+          requires: 
+            - cloudplatform-fetcher-arm64
+            - cloudplatform-fetcher
+          filters:
+            branches:
+              only: *deployable_branches
+
+  tenant-dal:
+    when: << pipeline.parameters.tenant-dal >>
+    jobs:
+      - build-golang:
+          name: tenant-dal
+          package_name: tenant-dal
+          context: BuildContext
+
+  objectstore-deleteunseen:
+    when: << pipeline.parameters.objectstore-deleteunseen >>
+    jobs:
+      - build-golang:
+          name: objectstore-deleteunseen
+          package_name: objectstore-deleteunseen
+          context: BuildContext
+
+  objectstore-operator:
+    when: << pipeline.parameters.objectstore-operator >>
+    jobs:
+      - build-golang:
+          name: objectstore-operator
+          package_name: objectstore-operator
+          context: BuildContext
+
+  tenant-deleter:
+    when: << pipeline.parameters.tenant-deleter >>
+    jobs:
+      - build-golang:
+          name: tenant-deleter
+          package_name: tenant-deleter
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  tenant-operator:
+    when: << pipeline.parameters.tenant-operator >>
+    jobs:
+      - build-golang:
+          name: tenant-operator
+          package_name: tenant-operator
+          context: BuildContext
+
+  backoffice-dal:
+    when: << pipeline.parameters.backoffice-dal >>
+    jobs:
+      - build-golang:
+          name: backoffice-dal
+          package_name: backoffice-dal
+          context: BuildContext
+
+  backoffice-request-dal:
+    when: << pipeline.parameters.backoffice-request-dal >>
+    jobs:
+      - build-golang:
+          name: backoffice-request-dal
+          package_name: backoffice-request-dal
+          context: BuildContext
+
+  backoffice-users-dal:
+    when: << pipeline.parameters.backoffice-users-dal >>
+    jobs:
+      - build-golang:
+          name: backoffice-users-dal
+          package_name: backoffice-users-dal
+          context: BuildContext
+
+  backoffice-ingestor:
+    when: << pipeline.parameters.backoffice-ingestor >>
+    jobs:
+      - build-golang:
+          name: backoffice-ingestor
+          package_name: backoffice-ingestor
+          context: BuildContext
+
+  diskanalyzer-scan-results-replay:
+    when: << pipeline.parameters.diskanalyzer-scan-results-replay >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-scan-results-replay
+          package_name: diskanalyzer-scan-results-replay
+          context: BuildContext
+
+  diskanalyzer-results-forwarder:
+    when: << pipeline.parameters.diskanalyzer-results-forwarder >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-results-forwarder
+          package_name: diskanalyzer-results-forwarder
+          context: BuildContext
+
+  outpost-operator:
+    when: << pipeline.parameters.outpost-operator >>
+    jobs:
+      - build-golang:
+          name: outpost-operator
+          package_name: outpost-operator
+          context: BuildContext
+
+  outpost-state-dal:
+    when: << pipeline.parameters.outpost-state-dal >>
+    jobs:
+      - build-golang:
+          name: outpost-state-dal
+          package_name: outpost-state-dal
+          context: BuildContext
+
+  outpost-statesyncer:
+    when: << pipeline.parameters.outpost-statesyncer >>
+    jobs:
+      - build-golang:
+          name: outpost-statesyncer
+          package_name: outpost-statesyncer
+          context: BuildContext
+
+  packageregistry-dal:
+    when: << pipeline.parameters.packageregistry-dal >>
+    jobs:
+      - build-golang:
+          name: packageregistry-dal
+          package_name: packageregistry-dal
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  packageregistry-fetcher:
+    when: << pipeline.parameters.packageregistry-fetcher >>
+    jobs:
+      - build-golang:
+          name: packageregistry-fetcher
+          package_name: packageregistry-fetcher
+          context: BuildContext
+      - build-golang:
+          name: packageregistry-fetcher-arm64
+          package_name: packageregistry-fetcher
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: packageregistry-fetcher
+          requires: 
+            - packageregistry-fetcher-arm64
+            - packageregistry-fetcher
+          filters:
+            branches:
+              only: *deployable_branches
+
+  scan-attribution-dal:
+    when: << pipeline.parameters.scan-attribution-dal >>
+    jobs:
+      - build-golang:
+          name: scan-attribution-dal
+          package_name: scan-attribution-dal
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  product-dal:
+    when: << pipeline.parameters.product-dal >>
+    jobs:
+      - build-golang:
+          name: product-dal
+          package_name: product-dal
+          context: BuildContext
+          executor_type: golang-with-janus-xlarge
+
+  builtins-updater:
+    when: << pipeline.parameters.builtins-updater >>
+    jobs:
+      - build-golang:
+          name: builtins-updater
+          package_name: builtins-updater
+          context: BuildContext
+          executor_type: golang-with-janus-xlarge
+
+  cspmlib:
+    when: << pipeline.parameters.cspmlib >>
+    jobs:
+      - build-golang:
+          name: cspmlib
+          package_name: cspmlib
+          context: BuildContext
+          executor_type: golang-xlarge
+          push_to_ecr: false
+          push_to_acr: false
+          build_docker_image: false
+
+  workload-dal:
+    when: << pipeline.parameters.workload-dal >>
+    jobs:
+      - build-golang:
+          name: workload-dal
+          package_name: workload-dal
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  forensic-dal:
+    when: << pipeline.parameters.forensic-dal >>
+    jobs:
+      - build-golang:
+          name: forensic-dal
+          package_name: forensic-dal
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  forensic-ingestor:
+    when: << pipeline.parameters.forensic-ingestor >>
+    jobs:
+      - build-golang:
+          name: forensic-ingestor
+          package_name: forensic-ingestor
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  forensic-cron:
+    when: << pipeline.parameters.forensic-cron >>
+    jobs:
+      - build-golang:
+          name: forensic-cron
+          package_name: forensic-cron
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  userdirectory-dal:
+    when: << pipeline.parameters.userdirectory-dal >>
+    jobs:
+      - build-golang:
+          name: userdirectory-dal
+          package_name: userdirectory-dal
+          context: BuildContext
+
+  auth:
+    when: << pipeline.parameters.auth >>
+    jobs:
+      - build-golang:
+          name: auth
+          package_name: auth
+          context: BuildContext
+
+  auth0-fetcher:
+    when: << pipeline.parameters.auth0-fetcher >>
+    jobs:
+      - build-golang:
+          name: auth0-fetcher
+          package_name: auth0-fetcher
+          context: BuildContext
+
+  accelerator-sync:
+    when: << pipeline.parameters.accelerator-sync >>
+    jobs:
+      - build-golang:
+          name: accelerator-sync
+          package_name: accelerator-sync
+          context: BuildContext
+
+  graph-ingestor:
+    when: << pipeline.parameters.graph-ingestor >>
+    jobs:
+      - build-golang:
+          name: graph-ingestor
+          package_name: graph-ingestor
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  graph-gc:
+    when: << pipeline.parameters.graph-gc >>
+    jobs:
+      - build-golang:
+          name: graph-gc
+          package_name: graph-gc
+          context: BuildContext
+          executor_type: golang-with-janus
+
+  issues-ingestor:
+    when: << pipeline.parameters.issues-ingestor >>
+    jobs:
+      - build-golang:
+          name: issues-ingestor
+          package_name: issues-ingestor
+          context: BuildContext
+
+  object-ingestor:
+    when: << pipeline.parameters.object-ingestor >>
+    jobs:
+      - build-golang:
+          name: object-ingestor
+          package_name: object-ingestor
+          context: BuildContext
+
+  scan-attribution-ingestor:
+    when: << pipeline.parameters.scan-attribution-ingestor >>
+    jobs:
+      - build-golang:
+          name: scan-attribution-ingestor
+          package_name: scan-attribution-ingestor
+          context: BuildContext
+
+  user-dal:
+    when: << pipeline.parameters.user-dal >>
+    jobs:
+      - build-golang:
+          name: user-dal
+          package_name: user-dal
+          context: BuildContext
+
+  notification-dal:
+    when: << pipeline.parameters.notification-dal >>
+    jobs:
+      - build-golang:
+          name: notification-dal
+          package_name: notification-dal
+          context: BuildContext
+
+  notification-ingestor:
+    when: << pipeline.parameters.notification-ingestor >>
+    jobs:
+      - build-golang:
+          name: notification-ingestor
+          package_name: notification-ingestor
+          context: BuildContext
+
+  techstack-dal:
+    when: << pipeline.parameters.techstack-dal >>
+    jobs:
+      - build-golang:
+          name: techstack-dal
+          package_name: techstack-dal
+          context: BuildContext
+
+  versioncontrol-dal:
+    when: << pipeline.parameters.versioncontrol-dal >>
+    jobs:
+      - build-golang:
+          name: versioncontrol-dal
+          package_name: versioncontrol-dal
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  versioncontrol-fetcher:
+    when: << pipeline.parameters.versioncontrol-fetcher >>
+    jobs:
+      - build-golang:
+          name: versioncontrol-fetcher
+          package_name: versioncontrol-fetcher
+          context: BuildContext
+      - build-golang:
+          name: versioncontrol-fetcher-arm64
+          package_name: versioncontrol-fetcher
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: versioncontrol-fetcher
+          requires: 
+            - versioncontrol-fetcher
+            - versioncontrol-fetcher-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+
+  securitytool-dal:
+    when: << pipeline.parameters.securitytool-dal >>
+    jobs:
+      - build-golang:
+          name: securitytool-dal
+          package_name: securitytool-dal
+          context: BuildContext
+
+  vulnerabilities-engine:
+    when: << pipeline.parameters.vulnerabilities-engine >>
+    jobs:
+      - build-golang:
+          name: vulnerabilities-engine
+          package_name: vulnerabilities-engine
+          context: BuildContext
+          use_private_repo: true
+
+  vminsight-ingestor:
+    when: << pipeline.parameters.vminsight-ingestor >>
+    jobs:
+      - build-golang:
+          name: vminsight-ingestor
+          package_name: vminsight-ingestor
+          context: BuildContext
+          use_private_repo: true
+          executor_type: golang-with-dynamo
+
+  graph-dal:
+    when: << pipeline.parameters.graph-dal >>
+    jobs:
+      - build-golang:
+          name: graph-dal
+          package_name: graph-dal
+          context: BuildContext
+          executor_type: golang-with-janus-xlarge
+
+  graph-enricher:
+    when: << pipeline.parameters.graph-enricher >>
+    jobs:
+      - build-golang:
+          name: graph-enricher
+          package_name: graph-enricher
+          context: BuildContext
+          executor_type: golang-with-janus
+      - build-golang:
+          name: graph-enricher-arm64
+          package_name: graph-enricher
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: graph-enricher
+          requires: 
+            - graph-enricher-arm64
+            - graph-enricher
+          filters:
+            branches:
+              only: *deployable_branches
+
+  fileupload-dal:
+    when: << pipeline.parameters.fileupload-dal >>
+    jobs:
+      - build-golang:
+          name: fileupload-dal
+          package_name: fileupload-dal
+          context: BuildContext
+
+  securitytool-parser:
+    when: << pipeline.parameters.securitytool-parser >>
+    jobs:
+      - build-golang:
+          name: securitytool-parser
+          package_name: securitytool-parser
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  datascanlib:
+    when: << pipeline.parameters.datascanlib >>
+    jobs:
+      - build-golang:
+          name: datascanlib
+          package_name: datascanlib
+          context: BuildContext
+          executor_type: ubuntu-2xlarge-machine
+          push_to_ecr: false
+          push_to_acr: false
+          build_docker_image: false
+
+  diskanalyzerlib:
+    when: << pipeline.parameters.diskanalyzerlib >>
+    jobs:
+      - build-golang:
+          name: diskanalyzerlib
+          package_name: diskanalyzerlib
+          context: BuildContext
+          executor_type: ubuntu-2xlarge-machine
+          push_to_ecr: false
+          push_to_acr: false
+          build_docker_image: false
+
+  diskanalyzer:
+    when: << pipeline.parameters.diskanalyzer >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer
+          package_name: diskanalyzer
+          context:
+            - BuildContext
+            - BuildContextDA
+          executor_type: ubuntu-2xlarge-machine
+          use_private_repo: true
+          build_docker_image: true
+          push_to_ecr: false
+          push_to_acr: true
+
+  bucketanalyzer:
+    when: << pipeline.parameters.bucketanalyzer >>
+    jobs:
+      - build-golang:
+          name: bucketanalyzer
+          package_name: bucketanalyzer
+          context:
+            - BuildContext
+            - BuildContextDA
+          use_private_repo: true
+          build_docker_image: true
+          push_to_ecr: false
+          push_to_acr: true
+
+  dbanalyzer:
+    when: << pipeline.parameters.dbanalyzer >>
+    jobs:
+      - build-golang:
+          name: dbanalyzer
+          package_name: dbanalyzer
+          context:
+            - BuildContext
+            - BuildContextDA
+          use_private_repo: true
+          build_docker_image: true
+          push_to_ecr: false
+          push_to_acr: true
+
+  diskanalyzer-init-pull-image:
+    when: << pipeline.parameters.diskanalyzer-init-pull-image >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-init-pull-image
+          package_name: diskanalyzer-init-pull-image
+          context:
+            - BuildContext
+            - BuildContextDA
+          use_private_repo: true
+          build_docker_image: true
+          push_to_ecr: false
+          push_to_acr: true
+
+  diskanalyzer-serverless-scanner:
+    when: << pipeline.parameters.diskanalyzer-serverless-scanner >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-serverless-scanner
+          package_name: diskanalyzer-serverless-scanner
+          executor_type: ubuntu-large-machine
+          context: BuildContext
+          build_docker_image: true
+
+  diskanalyzer-coordinator:
+    when: << pipeline.parameters.diskanalyzer-coordinator >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-coordinator
+          package_name: diskanalyzer-coordinator
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  diskanalyzer-provisioner:
+    when: << pipeline.parameters.diskanalyzer-provisioner >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner
+          package_name: diskanalyzer-provisioner
+          context: BuildContext
+
+  diskanalyzer-provisioner-aws:
+    when: << pipeline.parameters.diskanalyzer-provisioner-aws >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-aws
+          package_name: diskanalyzer-provisioner-aws
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-provisioner-azure:
+    when: << pipeline.parameters.diskanalyzer-provisioner-azure >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-azure
+          package_name: diskanalyzer-provisioner-azure
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-provisioner-dal:
+    when: << pipeline.parameters.diskanalyzer-provisioner-dal >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-dal
+          package_name: diskanalyzer-provisioner-dal
+          context: BuildContext
+
+  diskanalyzer-provisioner-gcp:
+    when: << pipeline.parameters.diskanalyzer-provisioner-gcp >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-gcp
+          package_name: diskanalyzer-provisioner-gcp
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-provisioner-oci:
+    when: << pipeline.parameters.diskanalyzer-provisioner-oci >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-oci
+          package_name: diskanalyzer-provisioner-oci
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-provisioner-helm:
+    when: << pipeline.parameters.diskanalyzer-provisioner-helm >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-helm
+          package_name: diskanalyzer-provisioner-helm
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-provisioner-bootstrap:
+    when: << pipeline.parameters.diskanalyzer-provisioner-bootstrap >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-provisioner-bootstrap
+          package_name: diskanalyzer-provisioner-bootstrap
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  diskanalyzer-diskmanager:
+    when: << pipeline.parameters.diskanalyzer-diskmanager >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-diskmanager
+          package_name: diskanalyzer-diskmanager
+          context:
+            - BuildContext
+            - BuildContextDA
+          push_to_acr: true
+          executor_type: golang-xlarge
+
+  diskanalyzer-operator:
+    when: << pipeline.parameters.diskanalyzer-operator >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-operator
+          package_name: diskanalyzer-operator
+          context:
+            - BuildContext
+            - BuildContextDA
+          executor_type: golang-large
+          push_to_acr: true
+      - validate-operator-generated:
+          context: BuildContext
+          package_name: diskanalyzer-operator
+          validate_local_chart_generation: true
+
+  outpost-files-csi-driver:
+    when: << pipeline.parameters.outpost-files-csi-driver >>
+    jobs:
+      - build-golang:
+          name: outpost-files-csi-driver
+          package_name: outpost-files-csi-driver
+          context:
+            - BuildContext
+            - BuildContextDA
+          push_to_acr: true
+
+  diskanalyzer-scanbroker:
+    when: << pipeline.parameters.diskanalyzer-scanbroker >>
+    jobs:
+      - build-golang:
+          name: diskanalyzer-scanbroker
+          package_name: diskanalyzer-scanbroker
+          context:
+            - BuildContext
+            - BuildContextDA
+          push_to_acr: true
+
+  log-http-relayer:
+    when: << pipeline.parameters.log-http-relayer >>
+    jobs:
+      - build-golang:
+          name: log-http-relayer
+          package_name: log-http-relayer
+          context:
+            - BuildContext
+            - BuildContextDA
+          push_to_acr: true
+
+  cspm-matcher:
+    when: << pipeline.parameters.cspm-matcher >>
+    jobs:
+      - build-golang:
+          name: cspm-matcher
+          package_name: cspm-matcher
+          context: BuildContext
+          executor_type: golang-large
+
+  tunnel-auth:
+    when: << pipeline.parameters.tunnel-auth >>
+    jobs:
+      - build-golang:
+          name: tunnel-auth
+          package_name: tunnel-auth
+          context: BuildContext
+
+  audit-dal:
+    when: << pipeline.parameters.audit-dal >>
+    jobs:
+      - build-golang:
+          name: audit-dal
+          package_name: audit-dal
+          context: BuildContext
+
+  audit-ingestor:
+    when: << pipeline.parameters.audit-ingestor >>
+    jobs:
+      - build-golang:
+          name: audit-ingestor
+          package_name: audit-ingestor
+          context: BuildContext
+
+  report-dal:
+    when: << pipeline.parameters.report-dal >>
+    jobs:
+      - build-golang:
+          name: report-dal
+          package_name: report-dal
+          context: BuildContext
+
+  report-run-executor:
+    when: << pipeline.parameters.report-run-executor >>
+    jobs:
+      - build-golang:
+          name: report-run-executor
+          package_name: report-run-executor
+          context: BuildContext
+
+  report-operator:
+    when: << pipeline.parameters.report-operator >>
+    jobs:
+      - build-golang:
+          name: report-operator
+          package_name: report-operator
+          context: BuildContext
+          executor_type: golang-large
+      - validate-operator-generated:
+          context: BuildContext
+          package_name: report-operator
+
+  benchmark-dal:
+    when: << pipeline.parameters.benchmark-dal >>
+    jobs:
+      - build-golang:
+          name: benchmark-dal
+          package_name: benchmark-dal
+          context: BuildContext
+
+  tunnel-server:
+    when: << pipeline.parameters.tunnel-server >>
+    jobs:
+      - build-utils: # piggy back
+          name: tunnel-server
+          package_name: tunnel-server
+          context: BuildContext
+
+  iac-dal:
+    when: << pipeline.parameters.iac-dal >>
+    jobs:
+      - build-golang:
+          name: iac-dal
+          package_name: iac-dal
+          context: BuildContext
+
+  secrets-dal:
+    when: << pipeline.parameters.secrets-dal >>
+    jobs:
+      - build-golang:
+          name: secrets-dal
+          package_name: secrets-dal
+          context: BuildContext
+
+  connector-operator:
+    when: << pipeline.parameters.connector-operator >>
+    jobs:
+      - build-golang:
+          name: connector-operator
+          package_name: connector-operator
+          context: BuildContext
+          executor_type: golang-large
+      - validate-operator-generated:
+          context: BuildContext
+          package_name: connector-operator
+
+  enricher-dal:
+    when: << pipeline.parameters.enricher-dal >>
+    jobs:
+      - build-golang:
+          name: enricher-dal
+          package_name: enricher-dal
+          context: BuildContext
+
+  enricher-operator:
+    when: << pipeline.parameters.enricher-operator >>
+    jobs:
+      - build-golang:
+          name: enricher-operator
+          package_name: enricher-operator
+          context: BuildContext
+          executor_type: golang-large
+      - validate-operator-generated:
+          context: BuildContext
+          package_name: enricher-operator
+
+  cspm-dal:
+    when: << pipeline.parameters.cspm-dal >>
+    jobs:
+      - build-golang:
+          name: cspm-dal
+          package_name: cspm-dal
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+
+  cli-dal:
+    when: << pipeline.parameters.cli-dal >>
+    jobs:
+      - build-golang:
+          name: cli-dal
+          package_name: cli-dal
+          context: BuildContext
+          executor_type: golang-large
+
+  cli:
+    when: << pipeline.parameters.cli >>
+    jobs:
+      - validate-wizcli-version:
+          context: BuildContext
+      - build-cli:
+          name: cli
+          context: BuildContext
+          requires:
+            - validate-wizcli-version
+
+      - upload-wizcli-global-s3:
+          context: BuildContext
+          file_name: wizcli
+          bucket_name: wizcli-global
+          requires:
+            - cli
+      - upload-wizcli-global-s3:
+          context: BuildContext
+          file_name: wizcli.exe
+          bucket_name: wizcli-global
+          requires:
+            - cli
+      - upload-wizcli-global-s3:
+          context: BuildContext
+          file_name: wizcli-mac
+          bucket_name: wizcli-global
+          requires:
+            - cli
+
+  hashcracker-ingestor:
+    when: << pipeline.parameters.hashcracker-ingestor >>
+    jobs:
+      - build-golang:
+          name: hashcracker-ingestor
+          package_name: hashcracker-ingestor
+          context: BuildContext
+          executor_type: golang-with-dynamo
+
+  scanstatus-ingestor:
+    when: << pipeline.parameters.scanstatus-ingestor >>
+    jobs:
+      - build-golang:
+          name: scanstatus-ingestor
+          package_name: scanstatus-ingestor
+          context: BuildContext
+
+  fetcher-dal:
+    when: << pipeline.parameters.fetcher-dal >>
+    jobs:
+      - build-golang:
+          name: fetcher-dal
+          package_name: fetcher-dal
+          context: BuildContext
+          executor_type: golang-xlarge
+      - build-golang:
+          name: fetcher-dal-arm64
+          package_name: fetcher-dal
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: fetcher-dal
+          requires:
+            - fetcher-dal-arm64
+            - fetcher-dal
+          filters:
+            branches:
+              only: *deployable_branches
+
+  sandboxed-opa-runner:
+    when: << pipeline.parameters.sandboxed-opa-runner >>
+    jobs:
+      - build-golang:
+          name: sandboxed-opa-runner
+          package_name: sandboxed-opa-runner
+          context: BuildContext
+          executor_type: golang-xlarge
+
+  filereputation:
+    when: << pipeline.parameters.filereputation >>
+    jobs:
+      - build-golang:
+          name: filereputation
+          package_name: filereputation
+          context: BuildContext
+      - build-golang:
+          name: filereputation-arm64
+          package_name: filereputation
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: filereputation
+          requires: 
+            - filereputation-arm64
+            - filereputation
+          filters:
+            branches:
+              only: *deployable_branches
+
+  filereputation-manager:
+    when: << pipeline.parameters.filereputation-manager >>
+    jobs:
+      - build-golang:
+          name: filereputation-manager
+          package_name: filereputation-manager
+          context: BuildContext
+          executor_type: golang-xlarge
+      - build-golang:
+          name: filereputation-manager-arm64
+          package_name: filereputation-manager
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: filereputation-manager
+          requires: 
+            - filereputation-manager-arm64
+            - filereputation-manager
+          filters:
+            branches:
+              only: *deployable_branches
+
+  tenant-monitor:
+    when: << pipeline.parameters.tenant-monitor >>
+    jobs:
+      - build-golang:
+          name: tenant-monitor
+          package_name: tenant-monitor
+          context: BuildContext
+
+  tenant-usagemetrics:
+    when: << pipeline.parameters.tenant-usagemetrics >>
+    jobs:
+      - build-golang:
+          name: tenant-usagemetrics
+          package_name: tenant-usagemetrics
+          context: BuildContext
+
+  securityinsight-dal:
+    when: << pipeline.parameters.securityinsight-dal >>
+    jobs:
+      - build-golang:
+          name: securityinsight-dal
+          package_name: securityinsight-dal
+          context: BuildContext
+
+  artifact-dal:
+    when: << pipeline.parameters.artifact-dal >>
+    jobs:
+      - build-golang:
+          name: artifact-dal
+          package_name: artifact-dal
+          context: BuildContext
+
+  artifact-fetcher:
+    when: << pipeline.parameters.artifact-fetcher >>
+    jobs:
+      - build-golang:
+          name: artifact-fetcher
+          package_name: artifact-fetcher
+          context: BuildContext
+      - build-golang:
+          name: artifact-fetcher-arm64
+          package_name: artifact-fetcher
+          context: BuildContext
+          executor_type: ubuntu-arm-2xlarge
+          wiz_ci_arm: true
+          push_tag_only: true
+          tag: << pipeline.git.revision >>-arm64
+          filters:
+            branches:
+              only: *deployable_branches
+      - create-and-push-docker-manifest:
+          name: create docker manifest
+          context: BuildContext
+          package_name: artifact-fetcher
+          requires: 
+            - artifact-fetcher-arm64
+            - artifact-fetcher
+          filters:
+            branches:
+              only: *deployable_branches
+
+  artifact-scan-ingestor:
+    when: << pipeline.parameters.artifact-scan-ingestor >>
+    jobs:
+      - build-golang:
+          name: artifact-scan-ingestor
+          package_name: artifact-scan-ingestor
+          context: BuildContext
+
+  netscanner-coordinator:
+    when: << pipeline.parameters.netscanner-coordinator >>
+    jobs:
+      - build-golang:
+          name: netscanner-coordinator
+          package_name: netscanner-coordinator
+          context: BuildContext
+
+  netscanner-results-ingestor:
+    when: << pipeline.parameters.netscanner-results-ingestor >>
+    jobs:
+      - build-golang:
+          name: netscanner-results-ingestor
+          package_name: netscanner-results-ingestor
+          context: BuildContext
+
+  netscanner-serverless:
+    when: << pipeline.parameters.netscanner-serverless >>
+    jobs:
+      - build-golang:
+          name: netscanner-serverless
+          package_name: netscanner-serverless
+          context: BuildContext
+          push_to_netscanner_ecr: true
+
+  netscanner-screenshot:
+    when: << pipeline.parameters.netscanner-screenshot >>
+    jobs:
+      - build-golang:
+          name: netscanner-screenshot
+          package_name: netscanner-screenshot
+          context: BuildContext
+          push_to_netscanner_ecr: true
+      - update-chromium-version:
+          context: BuildContext
+          filters:
+            branches:
+              only:
+                - develop
+
+  datascan-dal:
+    when: << pipeline.parameters.datascan-dal >>
+    jobs:
+      - build-golang:
+          name: datascan-dal
+          package_name: datascan-dal
+          context: BuildContext
+
+  host-configuration-dal:
+    when: << pipeline.parameters.host-configuration-dal >>
+    jobs:
+      - build-golang:
+          name: host-configuration-dal
+          package_name: host-configuration-dal
+          context: BuildContext
+
+  admission-controller-dal:
+    when: << pipeline.parameters.admission-controller-dal >>
+    jobs:
+      - build-golang:
+          name: admission-controller-dal
+          package_name: admission-controller-dal
+          context: BuildContext
+
+  wiz-admission-controller:
+    when: << pipeline.parameters.wiz-admission-controller >>
+    jobs:
+      - build-golang:
+          name: wiz-admission-controller
+          package_name: wiz-admission-controller
+          context: BuildContext
+          replicate_image: false
+  
+  postgres-updater:
+    when: << pipeline.parameters.postgres-updater >>
+    jobs:
+      - build-golang:
+          name: postgres-updater
+          package_name: postgres-updater
+          context: BuildContext
+
+  end2endtests:
+    when: << pipeline.parameters.end2endtests >>
+    jobs:
+      - build-golang-justbuild:
+          name: end2endtests
+          package_name: end2endtests
+          context: BuildContext
+
+  wiz-terraform-provider:
+    when: << pipeline.parameters.wiz-terraform-provider >>
+    jobs:
+      - build-wiz-terraform-provider:
+          name: build-provider
+          context: BuildContext
+      - sign-checksums:
+          name: sign-checksums
+          context: TerraformProviderSignContext
+          requires:
+            - build-provider
+      - upload-terraform-provider-to-global-s3:
+          context: BuildContext
+          bucket_name: "terraform-server-global"
+          requires:
+            - sign-checksums
+
+  utils:
+    when: << pipeline.parameters.utils >>
+    jobs:
+      - build-utils:
+          name: utils
+          package_name: utils
+          context: BuildContext
+
+  monthly-build:
+    triggers:
+      - schedule:
+          cron: "0 0 1 * *"
+          filters:
+            branches:
+              only:
+                - develop
+    jobs:
+      - trigger-build-all
+
+  threats-center-data:
+    when: << pipeline.parameters.threats-center-data >>
+    jobs:
+      - threats-center-data:
+          name: Threats Center Data
+          context: BuildContext
+
+  auth-pretoken:
+    when: << pipeline.parameters.auth-pretoken >>
+    jobs:
+      - build-golang:
+          name: auth-pretoken
+          package_name: auth-pretoken
+          context: BuildContext
+          push_to_auth_ecr: true
+
+  auth-msg:
+    when: << pipeline.parameters.auth-msg >>
+    jobs:
+      - build-golang:
+          name: auth-msg
+          package_name: auth-msg
+          context: BuildContext
+          push_to_auth_ecr: true
+
+  triggered-update-chromium-version:
+    when: << pipeline.parameters.trigger-update-chromium-version >>
+    jobs:
+      - update-chromium-version:
+          name: Update chromium version
+          context: BuildContext
+          filters:
+            branches:
+              only:
+                - develop
