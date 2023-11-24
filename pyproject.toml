@@ -14,7 +14,7 @@ demisto-sdk = "1.22.0"
 requests = "^2.22.0"
 pre-commit = "^2.20.0"
 google-cloud-compute = "^1.8.0"
-dateparser = "^1.1.8"
+dateparser = "^1.2.0"
 
 [tool.poetry.group.linters.dependencies]
 mypy = "^0.982"
