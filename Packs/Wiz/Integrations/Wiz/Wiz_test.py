@@ -5,7 +5,6 @@ import pytest
 from unittest.mock import patch
 import demistomock as demisto
 from CommonServerPython import DemistoException
-from Packs.Wiz.Integrations.Wiz.Wiz import resolve_issue
 
 integration_params = {
     'url': 'http://test.io',
@@ -178,7 +177,6 @@ def test_reject_issue(checkAPIerrors, capfd):
 
     res = reject_issue('12345678-2222-3333-1111-ff5fa2ff7f78', 'WONT_FIX', 'blah_note')
     assert res == test_reject_issue_response
-
 
 
 test_issue_id_not_valid = 'Error details: Resource not found'
@@ -380,7 +378,6 @@ VALID_RESPONSE_JSON = {
         }
     }
 }
-
 
 DEMISTO_ARGS = {
     'issue_type': 'Publicly exposed VM instance with effective global admin permissions',
@@ -704,7 +701,6 @@ test_clear_issue_due_data_failed_response = {
     "data": None
 }
 
-
 test_bad_token_response = {
     "error": "access_denied",
     "error_description": "Unauthorized"
@@ -809,7 +805,6 @@ def test_check_api_access(capfd, mocker):
         mocker.patch('Wiz.get_token', return_value=TEST_TOKEN)
         mocker.patch('requests.post', side_effect=Exception('bad request'))
         with pytest.raises(Exception) as e:
-
             checkAPIerrors(query='test', variables='test')
         assert str(e.value) == 'bad request'
 

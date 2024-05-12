@@ -228,7 +228,7 @@ script:
     - name: reopen_note
       description: reopen note.
   - name: wiz-resolve-issue
-    description: Resolve a Thread Detection Issue.
+    description: Resolve a Threat Detection Issue.
     arguments:
     - name: issue_id
       required: true

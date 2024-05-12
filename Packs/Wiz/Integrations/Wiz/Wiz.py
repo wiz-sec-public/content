@@ -878,8 +878,8 @@ def resolve_issue(issue_id, resolution_reason, resolution_note):
     issue_type = issue_object['data']['issues']['nodes'][0]['type']
 
     if issue_type != 'THREAT_DETECTION':
-        demisto.error(f"Only a Thread Detection Issue can be resolved.\nReceived an Issue of type {issue_type}.")
-        return f"Only a Thread Detection Issue can be resolved.\nReceived an Issue of type {issue_type}."
+        demisto.error(f"Only a Threat Detection Issue can be resolved.\nReceived an Issue of type {issue_type}.")
+        return f"Only a Threat Detection Issue can be resolved.\nReceived an Issue of type {issue_type}."
 
     return reject_or_resolve_issue(issue_id, resolution_reason, resolution_note, 'RESOLVED')
 
@@ -1362,8 +1362,8 @@ def is_valid_uuid(uuid_string):
         return str(uuid_obj) == uuid_string
     except ValueError:
         return False
-    except Exception as e:
-        print(str(e))
+    except Exception:
+        return False
 
 
 def is_valid_issue_id(issue_id):

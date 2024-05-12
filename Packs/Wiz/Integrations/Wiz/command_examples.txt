@@ -24,4 +24,4 @@
 
 !wiz-get-project-team project_name="project1"
 
-!wiz-resolve-issue issue_id="a6390747-f364-4239-bbc8-ef49a2586986" resolution_note="won't fix this issue as this is low priority" resolution_reason=WONT_FIX
+!wiz-resolve-issue issue_id="12345678-1234-1234-1234-cc0a24716e0b" resolution_note="won't fix this issue as this is low priority" resolution_reason="WONT_FIX"
