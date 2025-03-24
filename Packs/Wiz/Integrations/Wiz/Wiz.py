@@ -1407,95 +1407,6 @@ DELETE_NOTE_QUERY = ("""
   }
     """)
 
-# Pull Resources
-PULL_RESOURCES_QUERY = ("""
-        query GraphSearch(
-            $query: GraphEntityQueryInput
-            $controlId: ID
-            $projectId: String!
-            $first: Int
-            $after: String
-            $fetchTotalCount: Boolean!
-            $quick: Boolean
-            $fetchPublicExposurePaths: Boolean = false
-            $fetchInternalExposurePaths: Boolean = false
-            $fetchIssueAnalytics: Boolean = false
-          ) {
-            graphSearch(
-                query: $query
-                controlId: $controlId
-                projectId: $projectId
-                first: $first
-                after: $after
-                quick: $quick
-            ) {
-                totalCount @include(if: $fetchTotalCount)
-                maxCountReached @include(if: $fetchTotalCount)
-                pageInfo {
-                    endCursor
-                    hasNextPage
-                }
-                nodes {
-                    entities {
-                        id
-                        name
-                        type
-                        properties
-                        userMetadata {
-                            isInWatchlist
-                            isIgnored
-                            note
-                        }
-                        issueAnalytics: issues(filterBy: { status: [IN_PROGRESS, OPEN] })
-                            @include(if: $fetchIssueAnalytics) {
-                            lowSeverityCount
-                            mediumSeverityCount
-                            highSeverityCount
-                            criticalSeverityCount
-                        }
-                        publicExposures(first: 10) @include(if: $fetchPublicExposurePaths) {
-                            nodes {
-                                ...NetworkExposureFragment
-                            }
-                        }
-                        otherSubscriptionExposures(first: 10)
-                            @include(if: $fetchInternalExposurePaths) {
-                            nodes {
-                                ...NetworkExposureFragment
-                            }
-                        }
-                        otherVnetExposures(first: 10)
-                            @include(if: $fetchInternalExposurePaths) {
-                                nodes {
-                                    ...NetworkExposureFragment
-                                }
-                            }
-                        }
-                        aggregateCount
-                    }
-                }
-            }
-
-            fragment NetworkExposureFragment on NetworkExposure {
-                id
-                portRange
-                sourceIpRange
-                destinationIpRange
-                path {
-                    id
-                    name
-                    type
-                    properties
-                    issueAnalytics: issues(filterBy: { status: [IN_PROGRESS, OPEN] })
-                        @include(if: $fetchIssueAnalytics) {
-                            lowSeverityCount
-                            mediumSeverityCount
-                            highSeverityCount
-                            criticalSeverityCount
-                        }
-                }
-            }
-    """)
 PULL_RESOURCES_ID_NATIVE_QUERY = """
 query CloudResourceSearch($filterBy: CloudResourceFilters, $first: Int, $after: String) {
   cloudResources(filterBy: $filterBy, first: $first, after: $after) {
@@ -1538,26 +1449,6 @@ query CloudResourceSearch($filterBy: CloudResourceFilters, $first: Int, $after: 
   }
 }
 """
-PULL_RESOURCES_VARIABLES = {
-    "fetchPublicExposurePaths": True,
-    "fetchInternalExposurePaths": False,
-    "fetchIssueAnalytics": False,
-    "first": 50,
-    "query": {
-        "type": [
-            "CLOUD_RESOURCE"
-        ],
-        "select": True,
-        "where": {
-            "providerUniqueId": {
-                "EQUALS": []
-            }
-        }
-    },
-    "projectId": "*",
-    "fetchTotalCount": True,
-    "quick": True
-}
 
 # Copy to forensics account
 COPY_TO_FORENSICS_ACCOUNT_MUTATION = """
@@ -1585,6 +1476,9 @@ class WizInputParam:
     DUE_AT = 'due_at'
     VM_ID = 'vm_id'
     PROJECT_NAME = 'project_name'
+    SEARCH = 'search'
+    SUBSCRIPTION_EXTERNAL_IDS = 'subscription_external_ids'
+    PROVIDER_UNIQUE_IDS = 'provider_unique_ids'
 
 
 class WizStatus:
@@ -1676,7 +1570,7 @@ def checkAPIerrors(query, variables):
     result = requests.post(url=URL, json=data, headers=HEADERS)
 
     demisto.info(f"Result is {result}")
-    demisto.info(f"Result Json is {result.json()}")
+    demisto.info(f"Result Json is \n{result.json()}")
 
     error_message = ""
     if "errors" in result.json():
@@ -1949,6 +1843,55 @@ def get_filtered_issues(entity_type, resource_id, severity, issue_type, limit):
     return issues
 
 
+def get_resources(search, entity_type, subscription_external_ids, provider_unique_ids):
+    """
+        Retrieves Resources
+        """
+    demisto.info(f"Entity type is {entity_type}\n"
+                 f"Search is {search}\n"
+                 f"Subscription External IDs is {subscription_external_ids}\n"
+                 f"Provider Unique IDs is {provider_unique_ids}")
+    error_msg = ''
+
+    if not search and not entity_type and not subscription_external_ids and not provider_unique_ids:
+        error_msg = f"You should pass (at least) one of the following parameters:\n\t{WizInputParam.SEARCH}\n\t" \
+                    f"{WizInputParam.ENTITY_TYPE}\n\t{WizInputParam.SUBSCRIPTION_EXTERNAL_IDS}\n\t" \
+                    f"{WizInputParam.PROVIDER_UNIQUE_IDS}\n"
+
+    if error_msg:
+        demisto.error(error_msg)
+        return error_msg
+
+    variables = {
+        "first": WIZ_API_LIMIT,
+        "filterBy": {}
+    }
+
+    if search:
+        variables['filterBy']['search'] = search
+    if entity_type:
+        variables['filterBy']['type'] = [entity_type]
+    if subscription_external_ids:
+        subscription_external_ids_formatted = [str(x) for x in re.split(r'[,\s]+', subscription_external_ids.strip())]
+        variables['filterBy']['subscriptionExternalId'] = subscription_external_ids_formatted
+    if provider_unique_ids:
+        provider_unique_ids_formatted = [str(x) for x in re.split(r'[,\s]+', provider_unique_ids.strip())]
+        variables['filterBy']['providerUniqueId'] = provider_unique_ids_formatted
+
+    try:
+        response_json = checkAPIerrors(PULL_CLOUD_RESOURCES_NATIVE_QUERY, variables)
+    except DemistoException:
+        demisto.debug(f"could not find resources with this entity_type {entity_type}, search {search}, "
+                      f"subscription_external_ids {subscription_external_ids}, provider_unique_ids {provider_unique_ids}")
+        return {}
+
+    if response_json['data']['cloudResources']['nodes'] is None or not response_json['data']['cloudResources']['nodes']:
+        demisto.info("Resources Not Found")
+        return "Resources Not Found"
+    else:
+        return response_json
+
+
 def get_resource(resource_id, resource_name):
     """
     Retrieves Resource Details
@@ -1964,57 +1907,24 @@ def get_resource(resource_id, resource_name):
         demisto.error("You must pass either resource_name or resource_id")
         return "You should pass exactly one of resource_name or resource_id"
 
-    if resource_name:
-        variables = {
-            "first": WIZ_API_LIMIT,
-            "filterBy": {
-                "search": resource_name
-            }
-        }
-        try:
-            response_json = checkAPIerrors(PULL_CLOUD_RESOURCES_NATIVE_QUERY, variables)
-        except DemistoException:
-            demisto.debug(f"could not find resource with this resource_name {resource_name}")
-            return {}
-
-        if response_json['data']['cloudResources']['nodes'] is None or not response_json['data']['cloudResources']['nodes']:
-            demisto.info("Resource Not Found")
-            return "Resource Not Found"
-        else:
-            return response_json
-    # to get resource by resource_id
+    resource_search = resource_name if resource_name else resource_id
     variables = {
-        "fetchPublicExposurePaths": True,
-        "fetchInternalExposurePaths": False,
-        "fetchIssueAnalytics": False,
-        "first": 50,
-        "query": {
-            "type": [
-                "CLOUD_RESOURCE"
-            ],
-            "select": True,
-            "where": {
-                "providerUniqueId": {
-                    "EQUALS": [resource_id]
-                }
-            }
-        },
-        "projectId": "*",
-        "fetchTotalCount": True,
-        "quick": True
+        "first": WIZ_API_LIMIT,
+        "filterBy": {
+            "search": resource_search
+        }
     }
-
     try:
-        response_json = checkAPIerrors(PULL_RESOURCES_QUERY, variables)
+        response_json = checkAPIerrors(PULL_CLOUD_RESOURCES_NATIVE_QUERY, variables)
     except DemistoException:
-        demisto.debug(f"could not find resource with ID {resource_id}")
+        demisto.debug(f"could not find resource with this resource_name {resource_name}")
         return {}
 
-    if response_json['data']['graphSearch']['nodes'] is None or not response_json['data']['graphSearch']['nodes']:
+    if response_json['data']['cloudResources']['nodes'] is None or not response_json['data']['cloudResources']['nodes']:
         demisto.info("Resource Not Found")
-        return {}
+        return "Resource Not Found"
     else:
-        return response_json['data']['graphSearch']['nodes'][0]['entities'][0]
+        return response_json
 
 
 def reject_issue(issue_id, reject_reason, reject_comment):
@@ -2551,11 +2461,20 @@ def main():
             resource_id = demisto_args.get(WizInputParam.RESOURCE_ID)
             resource_name = demisto_args.get(WizInputParam.RESOURCE_NAME)
             resource = get_resource(resource_id=resource_id, resource_name=resource_name)
-            if resource_id:
-                command_result = CommandResults(outputs_prefix="Wiz.Manager.Resource", outputs=resource,
-                                                raw_response=resource)
-            else:
-                command_result = CommandResults(readable_output=resource, raw_response=resource)
+            command_result = CommandResults(outputs_prefix="Wiz.Manager.Resource", outputs=resource,
+                                            raw_response=resource)
+            return_results(command_result)
+
+        elif command == "wiz-get-resources":
+            demisto_args = demisto.args()
+            resources_search = demisto_args.get(WizInputParam.SEARCH)
+            resources_entity_type = demisto_args.get(WizInputParam.ENTITY_TYPE)
+            resources_subscription_external_ids = demisto_args.get(WizInputParam.SUBSCRIPTION_EXTERNAL_IDS)
+            resources_provider_unique_ids = demisto_args.get(WizInputParam.PROVIDER_UNIQUE_IDS)
+            resources = get_resources(search=resources_search, entity_type=resources_entity_type,
+                                      subscription_external_ids=resources_subscription_external_ids,
+                                      provider_unique_ids=resources_provider_unique_ids)
+            command_result = CommandResults(readable_output=resources, raw_response=resources)
             return_results(command_result)
 
         elif command == 'wiz-reject-issue':
@@ -2673,7 +2592,7 @@ def main():
 
         elif command == 'wiz-rescan-machine-disk':
             return_results(CommandResults(readable_output="This command is deprecated",
-                           raw_response="This command is deprecated"))
+                                          raw_response="This command is deprecated"))
 
         elif command == 'wiz-copy-to-forensics-account':
             demisto_args = demisto.args()

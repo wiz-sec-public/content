@@ -6,6 +6,7 @@ from unittest.mock import patch
 import demistomock as demisto
 
 from CommonServerPython import DemistoException
+from Packs.Wiz.Integrations.Wiz.Wiz import WizInputParam
 
 integration_params = {
     'url': 'http://test.io',
@@ -118,26 +119,12 @@ def test_get_issue(checkAPIerrors):
 
 test_get_resource_response = {
     "data": {
-        "graphSearch": {
-            "totalCount": 1,
-            "maxCountReached": False,
-            "pageInfo": {
-                "endCursor": "1",
-                "hasNextPage": False,
-                "__typename": "PageInfo"
-            },
+        "cloudResources": {
             "nodes": [
                 {
-                    "entities": [
-                        {
-                            "id": "12345678-2222-3333-1111-ff5fa2ff7f78",
-                            "name": "i_am_an_id",
-                            "type": "VIRTUAL_MACHINE",
-                            "properties": {
-                                "blah": "lots_of_blah_here"
-                            }
-                        }
-                    ]
+                    "id": "16da9341-6c72-46ba-948c-f0c057643e60",
+                    "name": "test_name_vm",
+                    "type": "VIRTUAL_MACHINE"
                 }
             ]
         }
@@ -148,17 +135,58 @@ test_get_resource_response = {
 @patch('Wiz.checkAPIerrors', return_value=test_get_resource_response)
 def test_get_resource_by_id(checkAPIerrors):
     from Wiz import get_resource
-    result_response = {
-        "id": "12345678-2222-3333-1111-ff5fa2ff7f78",
-        "name": "i_am_an_id",
-        "type": "VIRTUAL_MACHINE",
-        "properties": {
-            "blah": "lots_of_blah_here"
-        }
-    }
 
     res = get_resource(resource_id='i_am_an_id', resource_name='')
-    assert res == result_response
+    assert res == test_get_resource_response
+
+
+test_get_resources_response = {
+  "data": {
+    "cloudResources": {
+      "nodes": [
+        {
+          "id": "12345678-2222-3333-1111-ff5fa2ff7f78",
+          "name": "view",
+          "type": "ACCESS_ROLE",
+          "subscriptionId": "12345678-2222-3333-1111-ff5fa2ff7f78",
+          "subscriptionExternalId": "123456789",
+          "graphEntity": {
+            "id": "12345678-2222-3333-1111-ff5fa2ff7f78",
+            "providerUniqueId": None,
+            "name": "view",
+            "type": "ACCESS_ROLE",
+            "projects": [
+              {
+                "id": "12345678-2222-3333-1111-ff5fa2ff1111"
+              },
+              {
+                "id": "12345678-2222-3333-1111-ff5fa2ff2222"
+              },
+              {
+                "id": "12345678-2222-3333-1111-ff5fa2ff3333"
+              }
+            ],
+            "firstSeen": "2025-02-12T21:03:10.981466Z",
+            "lastSeen": "2025-03-24T00:01:31Z"
+          }
+        }]
+}}}
+
+
+@patch('Wiz.checkAPIerrors', return_value=test_get_resources_response)
+def test_get_resources(checkAPIerrors):
+    from Wiz import get_resources
+    res = get_resources(search='search', entity_type='ACCESS_ROLE', subscription_external_ids='123456789',
+                        provider_unique_ids='12345678-2222-3333-1111-ff5fa2ff7f78')
+    assert res == test_get_resources_response
+
+
+def test_get_resources_wrong_input():
+    from Wiz import get_resources
+    res = get_resources(search=None, entity_type=None, subscription_external_ids=None, provider_unique_ids=None)
+    assert "You should pass (at least) one of the following parameters" in res and WizInputParam.SEARCH in res \
+           and WizInputParam.ENTITY_TYPE in res and WizInputParam.PROVIDER_UNIQUE_IDS in res \
+           and WizInputParam.SUBSCRIPTION_EXTERNAL_IDS in res
 
 
 test_get_resource_response_search = {
