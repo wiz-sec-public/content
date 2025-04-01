@@ -69,11 +69,11 @@
                 },
                 "Wiz Project Owners": {
                     "complex": null,
-                    "simple": "issue.projects.projectOwners"
+                    "simple": "issue.projects.projectOwners.name"
                 },
                 "Wiz Project Security Champions": {
                     "complex": null,
-                    "simple": "issue.projects.securityChampions"
+                    "simple": "issue.projects.securityChampions.name"
                 },
                 "Wiz Resource Cloud ID": {
                     "complex": null,
