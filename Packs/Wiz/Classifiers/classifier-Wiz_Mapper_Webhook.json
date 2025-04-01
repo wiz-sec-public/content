@@ -63,10 +63,6 @@
                     },
                     "simple": ""
                 },
-                "Wiz Issue Note": {
-                    "complex": null,
-                    "simple": "issue.note"
-                },
                 "Wiz Issue Projects": {
                     "complex": null,
                     "simple": "issue.projects"
