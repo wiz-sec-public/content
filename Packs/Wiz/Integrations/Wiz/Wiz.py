@@ -1642,7 +1642,7 @@ def fetch_issues(max_fetch):
                 "IN_PROGRESS"
             ],
 
-            "createdAt": {
+            "updatedAt": {
                 "after":
                     last_run
             },
