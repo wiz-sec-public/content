@@ -62,7 +62,7 @@ query IssuesTable(
         ... on Control {
           id
           name
-          controlDescription: description
+          description
           resolutionRecommendation
           securitySubCategories {
             title
@@ -77,14 +77,14 @@ query IssuesTable(
         ... on CloudEventRule{
           id
           name
-          cloudEventRuleDescription: description
+          description
           sourceType
           type
         }
         ... on CloudConfigurationRule{
           id
           name
-          cloudConfigurationRuleDescription: description
+          description
           remediationInstructions
           serviceType
         }
