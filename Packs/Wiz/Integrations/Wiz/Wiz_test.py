@@ -180,12 +180,13 @@ def test_get_resources(checkAPIerrors):
     assert res == test_get_resources_response
 
 
-def test_get_resources_wrong_input():
-    from Wiz import get_resources, WizInputParam
-    res = get_resources(search=None, entity_type=None, subscription_external_ids=None, provider_unique_ids=None)
-    assert "You should pass (at least) one of the following parameters" in res and "search" in res \
-           and "entity_type" in res and "provider_unique_ids" in res \
-           and "subscription_external_ids" in res
+def test_get_resources_wrong_input(capfd):
+    from Wiz import get_resources
+    with capfd.disabled():
+        res = get_resources(search=None, entity_type=None, subscription_external_ids=None, provider_unique_ids=None)
+        assert "You should pass (at least) one of the following parameters" in res and "search" in res \
+               and "entity_type" in res and "provider_unique_ids" in res \
+               and "subscription_external_ids" in res
 
 
 test_get_resource_response_search = {
