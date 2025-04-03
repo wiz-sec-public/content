@@ -10,8 +10,9 @@ WIZ_HTTP_QUERIES_LIMIT = 500  # Request limit during run
 WIZ_API_LIMIT = 500  # limit number of returned records from the Wiz API
 WIZ = 'wiz'
 
-WIZ_VERSION = '1.3.2'
+WIZ_VERSION = '1.4.0'
 INTEGRATION_GUID = '8864e131-72db-4928-1293-e292f0ed699f'
+NOT_DEFINED = 'Not Defined'
 
 
 def get_integration_user_agent():
@@ -43,7 +44,7 @@ AUTH0_PREFIX = [
 URL_SUFFIX = 'wiz.io/oauth/token'
 URL_SUFFIX_FED = 'wiz.us/oauth/token'
 
-# Pull Issues
+# Issues Queries
 PULL_ISSUES_QUERY = ("""
 query IssuesTable(
   $filterBy: IssueFilters
@@ -97,6 +98,12 @@ query IssuesTable(
         id
         name
         slug
+        projectOwners{
+          name
+        }
+        securityChampions{
+          name
+        }
         businessUnit
         riskProfile {
           businessImpact
@@ -1228,8 +1235,6 @@ PULL_ISSUES_TEST_VARIABLES = test_variables = {
         'direction': 'DESC'
     }
 }
-
-# Pull Issue Evidence
 PULL_ISSUE_EVIDENCE_QUERY = ("""
   query GraphSearch(
     $query: GraphEntityQueryInput
@@ -1407,6 +1412,7 @@ DELETE_NOTE_QUERY = ("""
   }
     """)
 
+# Resources Queries
 PULL_RESOURCES_ID_NATIVE_QUERY = """
 query CloudResourceSearch($filterBy: CloudResourceFilters, $first: Int, $after: String) {
   cloudResources(filterBy: $filterBy, first: $first, after: $after) {
@@ -1450,7 +1456,7 @@ query CloudResourceSearch($filterBy: CloudResourceFilters, $first: Int, $after: 
 }
 """
 
-# Copy to forensics account
+# Forensics Queries
 COPY_TO_FORENSICS_ACCOUNT_MUTATION = """
         mutation CopyResourceForensicsToExternalAccount($input: CopyResourceForensicsToExternalAccountInput!) {
           copyResourceForensicsToExternalAccount(input: $input) {
@@ -1458,6 +1464,198 @@ COPY_TO_FORENSICS_ACCOUNT_MUTATION = """
           }
         }
     """
+
+# Project Queries
+PULL_PROJECTS_QUERY = """
+query ProjectsTable($filterBy: ProjectFilters, $first: Int, $after: String, $orderBy: ProjectOrder) {
+  projects(filterBy: $filterBy, first: $first, after: $after, orderBy: $orderBy) {
+    nodes {
+      id
+      name
+      isFolder
+      archived
+      businessUnit
+      description
+      projectOwners {
+        id
+        name
+        email
+      }
+      securityChampions {
+        id
+        name
+        email
+      }
+    }
+  }
+}"""
+
+# Detection Queries
+PULL_DETECTIONS_QUERY = """
+query Detections($filterBy: DetectionFilters, $first: Int, $after: String, $orderBy: DetectionOrder, $includeTriggeringEvents: Boolean = true) {
+  detections(
+    filterBy: $filterBy
+    first: $first
+    after: $after
+    orderBy: $orderBy
+    enforceTimestampContinuity: true
+  ) {
+    nodes {
+      id
+      issue {
+        id
+        url
+      }
+      ruleMatch {
+        rule {
+          id
+          name
+          sourceType
+          securitySubCategories {
+            title
+            category {
+              name
+              framework {
+                name
+              }
+            }
+          }
+        }
+      }
+      description
+      severity
+      createdAt
+      cloudAccounts {
+        cloudProvider
+        externalId
+        name
+        linkedProjects {
+          id
+          name
+        }
+      }
+      cloudOrganizations {
+        cloudProvider
+        externalId
+        name
+      }
+      startedAt
+      endedAt
+      actors {
+        id
+        externalId
+        name
+        type
+        nativeType
+        actingAs {
+          id
+          externalId
+          name
+          type
+          nativeType
+        }
+      }
+      primaryActor {
+        id
+      }
+      resources {
+        id
+        externalId
+        name
+        type
+        nativeType
+        region
+        cloudAccount {
+          cloudProvider
+          externalId
+          name
+        }
+        kubernetesNamespace {
+          id
+          providerUniqueId
+          name
+        }
+        kubernetesCluster {
+          id
+          providerUniqueId
+          name
+        }
+      }
+      primaryResource {
+        id
+      }
+      triggeringEvents(first: 10) @include(if: $includeTriggeringEvents) {
+        nodes {
+          ... on CloudEvent {
+            id
+            origin
+            name
+            description
+            cloudProviderUrl
+            cloudPlatform
+            timestamp
+            source
+            category
+            status
+            actor {
+              id
+              actingAs {
+                id
+              }
+            }
+            actorIP
+            actorIPMeta {
+              country
+              autonomousSystemNumber
+              autonomousSystemOrganization
+              reputation
+              reputationDescription
+              reputationSource
+              relatedAttackGroupNames
+              customIPRanges {
+                id
+                name
+                isInternal
+                ipRanges
+              }
+            }
+            resources {
+              id
+            }
+            extraDetails {
+              ... on CloudEventRuntimeDetails {
+                processTree {
+                  command
+                  container {
+                    id
+                    externalId
+                    name
+                    image {
+                      id
+                      externalId
+                    }
+                  }
+                  path
+                  hash
+                  size
+                  executionTime
+                  runtimeProgramId
+                  userId
+                  userName
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"""
 
 
 class WizInputParam:
@@ -1642,7 +1840,7 @@ def fetch_issues(max_fetch):
                 "IN_PROGRESS"
             ],
 
-            "updatedAt": {
+            "statusChangedAt": {
                 "after":
                     last_run
             },
@@ -2261,90 +2459,28 @@ def get_project_team(project_name):
     project_variables = {
         "first": 20,
         "filterBy": {
-            "search": project_name
+            "search": project_name,
+            "includeArchived": False
         },
         "orderBy": {
             "field": "SECURITY_SCORE",
             "direction": "ASC"
-        },
-        "analyticsSelection": {}
-    }
-    project_query = (  # pragma: no cover
-        """
-    query ProjectsTable(
-        $filterBy: ProjectFilters
-        $first: Int
-        $after: String
-        $orderBy: ProjectOrder
-        $analyticsSelection: ProjectIssueAnalyticsSelection
-    ) {
-        projects(
-        filterBy: $filterBy
-        first: $first
-        after: $after
-        orderBy: $orderBy
-        ) {
-        nodes {
-            id
-            name
-            description
-            businessUnit
-            archived
-            slug
-            projectOwners {
-            id
-            name
-            email
-            }
-            securityChampions {
-            id
-            name
-            email
-            }
-            cloudAccountCount
-            repositoryCount
-            securityScore
-            riskProfile {
-            businessImpact
-            }
-            teamMemberCount
-            issueAnalytics(selection: $analyticsSelection) {
-            issueCount
-            scopeSize
-            informationalSeverityCount
-            lowSeverityCount
-            mediumSeverityCount
-            highSeverityCount
-            criticalSeverityCount
-            }
-        }
-        pageInfo {
-            hasNextPage
-            endCursor
-        }
         }
     }
-    """)
 
     try:
-        response_json = checkAPIerrors(project_query, project_variables)
+        response_json = checkAPIerrors(PULL_PROJECTS_QUERY, project_variables)
     except DemistoException:
         demisto.debug(f"Error with finding Project with name {project_name}")
         return {}
 
-    project_response = response_json.get('data', {}).get('projects', {}).get('nodes')
+    nodes = response_json.get('data', {}).get('projects', {}).get('nodes', [])
 
-    demisto.info(f"Validating if Project with name \"{project_name}\" exists.")
-    if not project_response:
-        demisto.debug(f"Project with name {project_name} does not exist")
+    if not nodes:
+        demisto.error(f"Project with name {project_name} does not exist")
         return {}
 
-    else:
-        project_team = {
-            "projectOwners": project_response[0]['projectOwners'],
-            "securityChampions": project_response[0]['securityChampions']
-        }
-        return project_team
+    return nodes
 
 
 def copy_to_forensics_account(resource_id):
@@ -2385,6 +2521,80 @@ def copy_to_forensics_account(resource_id):
         return {}
     else:
         return response_json
+
+
+def get_detections(severity=None, including_triggering_events=False, created_at_days_back=None):
+    """
+    Get threat detection details with optional filtering
+
+    Args:
+        severity (str): Filter by severity level (CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL)
+        including_triggering_events (bool): Whether to include triggering events in the response
+        created_at_days_back (int): How many days back to fetch detections (1-14)
+
+    Returns:
+        dict: The detections matching the filters
+    """
+    demisto.debug("get_detections, enter")
+
+    # Convert parameters
+    include_triggering_events = argToBoolean(including_triggering_events) if including_triggering_events else False
+
+    # Validate parameters
+    error_message = ""
+    days_back = 0
+
+    if severity and severity.upper() not in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]:
+        error_message = "severity parameter must be one of: CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL"
+
+    if created_at_days_back:
+        try:
+            days_back = int(created_at_days_back)
+            if days_back < 1 or days_back > 14:
+                error_message = error_message + "\n " + "created_at_days_back parameter value should be between 1 and 14"
+        except ValueError:
+            error_message = error_message + "\n " + "created_at_days_back parameter must be an integer between 1 and 14"
+
+    if error_message:
+        demisto.error(error_message)
+        return error_message
+
+    # Create the variables for the GraphQL query
+    page_size = 50 if include_triggering_events else WIZ_API_LIMIT
+    variables = {
+        'first': page_size,
+        'filterBy': {
+            "severity": {
+                "equals": severity
+            },
+        },
+        'includeTriggeringEvents': include_triggering_events,
+        "orderBy": {"field": "CREATED_AT", "direction": "ASC"}
+    }
+    variables['filterBy']['createdAt'] = {
+        "inLast": {"amount": days_back, "unit": "DurationFilterValueUnitDays"}
+    }
+
+    try:
+        # Execute the GraphQL query
+        response_json = checkAPIerrors(PULL_DETECTIONS_QUERY, variables)
+
+        detections = []
+        if response_json.get('data', {}).get('detections', {}).get('nodes'):
+            detections = response_json['data']['detections']['nodes']
+
+        # Handle pagination if there are more results
+        while response_json.get('data', {}).get('detections', {}).get('pageInfo', {}).get('hasNextPage', False):
+            variables['after'] = response_json['data']['detections']['pageInfo']['endCursor']
+            response_json = checkAPIerrors(PULL_DETECTIONS_QUERY, variables)
+            if response_json.get('data', {}).get('detections', {}).get('nodes'):
+                detections.extend(response_json['data']['detections']['nodes'])
+
+        return detections
+
+    except DemistoException as e:
+        demisto.debug(f"Error getting detections: {str(e)}")
+        return f"Error getting detections: {str(e)}"
 
 
 def is_valid_uuid(uuid_string):
@@ -2601,6 +2811,24 @@ def main():
                 resource_id=resource_id
             )
             command_result = CommandResults(readable_output=copy_mutation_response, raw_response=copy_mutation_response)
+            return_results(command_result)
+        elif command == 'wiz-get-detections':
+            demisto_args = demisto.args()
+            detections = get_detections(
+                severity=demisto_args.get('severity'),
+                including_triggering_events=demisto_args.get('including_triggering_events'),
+                created_at_days_back=demisto_args.get('created_at_days_back')
+            )
+
+            if isinstance(detections, str):
+                # This means the result is an error message
+                command_result = CommandResults(readable_output=detections, raw_response=detections)
+            else:
+                command_result = CommandResults(
+                    outputs_prefix="Wiz.Manager.Detections",
+                    outputs=detections,
+                    raw_response=detections
+                )
             return_results(command_result)
 
         else:
