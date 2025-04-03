@@ -272,9 +272,6 @@ script:
     - contextPath: Wiz.Manager.Issues.status
       description: Wiz Issue status (open, resolved, rejected).
       type: String
-    - contextPath: Wiz.Manager.Issues.note
-      description: Wiz Issue note.
-      type: String
   - name: wiz-get-resource
     arguments:
       - description: resource provider unique id.
@@ -421,6 +418,28 @@ script:
       - name: resource_id
         description: ID of the resource to copy its Volumes. Can be Wiz ID or provider's ID.
         required: true
+  - name: wiz-get-detections
+    description: Get Wiz threat detection details.
+    arguments:
+      - name: severity
+        auto: PREDEFINED
+        predefined:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+          - INFORMATIONAL
+        description: Filter detections by severity level and above.
+      - name: including_triggering_events
+        auto: PREDEFINED
+        predefined:
+          - "true"
+          - "false"
+        defaultValue: "false"
+        description: Whether to include triggering events in the response.
+      - name: created_at_days_back
+        description: How many days back to fetch detections (1-14).
+        defaultValue: "1"
   dockerimage: demisto/python3:3.11.10.115186
   isfetch: true
   runonce: false

@@ -6,7 +6,6 @@ from unittest.mock import patch
 import demistomock as demisto
 
 from CommonServerPython import DemistoException
-from Packs.Wiz.Integrations.Wiz.Wiz import WizInputParam
 
 integration_params = {
     'url': 'http://test.io',
@@ -182,11 +181,11 @@ def test_get_resources(checkAPIerrors):
 
 
 def test_get_resources_wrong_input():
-    from Wiz import get_resources
+    from Wiz import get_resources, WizInputParam
     res = get_resources(search=None, entity_type=None, subscription_external_ids=None, provider_unique_ids=None)
-    assert "You should pass (at least) one of the following parameters" in res and WizInputParam.SEARCH in res \
-           and WizInputParam.ENTITY_TYPE in res and WizInputParam.PROVIDER_UNIQUE_IDS in res \
-           and WizInputParam.SUBSCRIPTION_EXTERNAL_IDS in res
+    assert "You should pass (at least) one of the following parameters" in res and "search" in res \
+           and "entity_type" in res and "provider_unique_ids" in res \
+           and "subscription_external_ids" in res
 
 
 test_get_resource_response_search = {
@@ -461,10 +460,30 @@ VALID_RESPONSE_JSON = {
             "resolutionReason": "blabla reason"
         },
         "projects": {
-            "nodes": [{
-                "projectOwners": "owner-test",
-                "securityChampions": "champion-test"
-            }]
+            "nodes": [
+                {
+                    "id": "12345678-cfa4-5268-a6a9-987654321",
+                    "name": "test-test-test",
+                    "isFolder": True,
+                    "archived": False,
+                    "businessUnit": "R&D",
+                    "description": "test description",
+                    "projectOwners": [
+                        {
+                            "id": "project@test.io",
+                            "name": "Test Owner",
+                            "email": "test.owner@wiz.io"
+                        }
+                    ],
+                    "securityChampions": [
+                        {
+                            "id": "champion@test.io",
+                            "name": "Test Champion",
+                            "email": "test.champion@wiz.io"
+                        }
+                    ]
+                }
+            ]
         },
         "cloudResources": {
             "nodes": [{
@@ -554,8 +573,8 @@ def test_get_project_team(mocker, capfd):
     with capfd.disabled():
         mocker.patch('Wiz.checkAPIerrors', return_value=VALID_RESPONSE_JSON)
         project = get_project_team('test_project')
-        assert project['projectOwners'] == 'owner-test'
-        assert project['securityChampions'] == 'champion-test'
+        assert project[0]['projectOwners'][0]['name'] == 'Test Owner'
+        assert project[0]['securityChampions'][0]['name'] == 'Test Champion'
 
         mocker.patch('Wiz.checkAPIerrors', side_effect=DemistoException('demisto exception'))
         project = get_project_team('test_project')

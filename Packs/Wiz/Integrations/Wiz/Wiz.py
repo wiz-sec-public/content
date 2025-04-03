@@ -2060,7 +2060,7 @@ def get_resources(search, entity_type, subscription_external_ids, provider_uniqu
         demisto.error(error_msg)
         return error_msg
 
-    variables = {
+    variables: Dict[str, Any] = {
         "first": WIZ_API_LIMIT,
         "filterBy": {}
     }
