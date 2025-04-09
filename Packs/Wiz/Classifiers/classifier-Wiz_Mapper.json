@@ -115,13 +115,8 @@
                     "simple": "issue.severity"
                 },
                 "Wiz Issue Resolution Recommendation": {
-                    "complex": {
-                        "accessor": "resolutionRecommendation",
-                        "filters": [],
-                        "root": "sourceRule",
-                        "transformers": []
-                    },
-                    "simple": ""
+                    "complex": null,
+                    "simple": "sourceRule.resolutionRecommendation"
                 }
             }
         },
