@@ -805,7 +805,7 @@ test_clear_issue_note_response = {
 }
 
 test_clear_issue_note_fail_response = (
-    "Error details: Only the user who created the note, can delete it.\n" "Check server.log file for additional information"
+    "Error details: Only the user who created the note, can delete it.\nCheck server.log file for additional information"
 )
 
 
@@ -3131,7 +3131,7 @@ def test_known_phantom_exemptions_are_actually_referenced():
         referenced.add(simple)
 
     stale = [name for name in _KNOWN_PHANTOM_SOURCES if name not in referenced]
-    assert not stale, f"Phantom exemption(s) no longer referenced anywhere — remove from " f"_KNOWN_PHANTOM_SOURCES: {stale}"
+    assert not stale, f"Phantom exemption(s) no longer referenced anywhere — remove from _KNOWN_PHANTOM_SOURCES: {stale}"
 
 
 def test_check_api_errors_wraps_request_timeout(mocker):

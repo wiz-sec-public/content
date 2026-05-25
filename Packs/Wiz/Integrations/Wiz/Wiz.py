@@ -1749,8 +1749,7 @@ def get_token():
         response = requests.post(AUTH_E, headers=HEADERS_AUTH, data=auth_payload, timeout=API_REQUEST_TIMEOUT)
     except requests.Timeout:
         raise Exception(
-            f"Wiz authentication request timed out after {API_REQUEST_TIMEOUT}s. "
-            "Check Wiz API availability and retry."
+            f"Wiz authentication request timed out after {API_REQUEST_TIMEOUT}s. Check Wiz API availability and retry."
         )
 
     if response.status_code != requests.codes.ok:
@@ -1798,7 +1797,7 @@ def checkAPIerrors(query, variables):
         demisto.info("No Issue(/s) available to fetch.")
 
     if error_message:
-        demisto.error("An error has occurred using:\n" f"\tQuery: {query}\n" f"\tVariables: {variables}\n" f"\t{error_message}")
+        demisto.error(f"An error has occurred using:\n\tQuery: {query}\n\tVariables: {variables}\n\t{error_message}")
         demisto.error(error_message)
         raise Exception(f"{error_message}\nCheck 'server.log' instance file to get additional information")
     return response_json
@@ -1889,7 +1888,7 @@ def build_incidents(issue):
             "severity": severity,
         }
 
-        demisto.debug(f"build_incidents: Successfully created incident for {issue_id} " f"using {incident}")
+        demisto.debug(f"build_incidents: Successfully created incident for {issue_id} using {incident}")
         return incident
 
     except Exception as e:
@@ -2176,10 +2175,7 @@ def get_filtered_issues(entity_type, resource_id, severity, issue_type, limit):
     Retrieves Filtered Issues
     """
     demisto.info(
-        f"Entity type is {entity_type}\n"
-        f"Resource ID is {resource_id}\n"
-        f"Severity is {severity}\n"
-        f"Issue type is {issue_type}"
+        f"Entity type is {entity_type}\nResource ID is {resource_id}\nSeverity is {severity}\nIssue type is {issue_type}"
     )
     error_msg = ""
 
@@ -2259,12 +2255,10 @@ def get_filtered_issues(entity_type, resource_id, severity, issue_type, limit):
             issue_variables["filterBy"]["severity"] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]
         else:
             demisto.info(
-                "You should only use these severity types: CRITICAL, HIGH, MEDIUM, LOW or INFORMATIONAL "
-                "in upper or lower case."
+                "You should only use these severity types: CRITICAL, HIGH, MEDIUM, LOW or INFORMATIONAL in upper or lower case."
             )
             return (
-                "You should only use these severity types: CRITICAL, HIGH, MEDIUM, LOW or INFORMATIONAL in "
-                "upper or lower case."
+                "You should only use these severity types: CRITICAL, HIGH, MEDIUM, LOW or INFORMATIONAL in upper or lower case."
             )
 
     if issue_type:
